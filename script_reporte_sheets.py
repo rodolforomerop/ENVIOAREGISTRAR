@@ -32,13 +32,12 @@ def initialize_firebase():
 
 def main():
     """Función principal para generar el reporte."""
+    db = None
     try:
         # --- Configuración ---
-        # Cambia este estado al que quieras filtrar
         ESTADO_A_FILTRAR = "Recibido" 
-        # Nombre del archivo de Google Sheets que se creará o actualizará
-        NOMBRE_GOOGLE_SHEET = "Reporte de Registros IMEI"
-        # Email del usuario o cuenta de servicio al que se le compartirá la hoja
+        NUEVO_ESTADO = "En Proceso"
+        NOMBRE_GOOGLE_SHEET = "Registros para Procesar"
         EMAIL_PARA_COMPARTIR = os.getenv('GOOGLE_SHEETS_SHARE_EMAIL')
         if not EMAIL_PARA_COMPARTIR:
             print("Advertencia: La variable GOOGLE_SHEETS_SHARE_EMAIL no está configurada. La hoja no se compartirá.")
@@ -55,30 +54,22 @@ def main():
         print(f"Buscando registros con estado: '{ESTADO_A_FILTRAR}'...")
         registros_ref = db.collection('registros').where('status', '==', ESTADO_A_FILTRAR).stream()
 
-        registros = [doc.to_dict() for doc in registros_ref]
+        # Guardamos los documentos en una lista para poder iterar y actualizar después
+        docs_a_procesar = list(registros_ref)
 
-        if not registros:
-            print(f"No se encontraron registros con el estado '{ESTADO_A_FILTRAR}'. No se generará el reporte.")
+        if not docs_a_procesar:
+            print(f"No se encontraron registros nuevos con el estado '{ESTADO_A_FILTRAR}'. No se generará el reporte.")
             return
 
-        print(f"Se encontraron {len(registros)} registros. Procesando para Google Sheets...")
+        print(f"Se encontraron {len(docs_a_procesar)} registros. Procesando para Google Sheets...")
 
-        # Preparar datos para la hoja de cálculo
-        headers = [
-            "orderNumber", "status", "createdAt", "customerName", "customerEmail",
-            "whatsapp", "deviceType", "brand", "model", "imei1", "imei2", "serialNumber",
-            "processingDate", "resultado_verificacion", "fecha_verificacion"
-        ]
+        # Cabeceras específicas
+        headers = ["imei1", "imei2", "serialNumber", "brand", "model"]
         
         datos_para_sheets = [headers]
-        for reg in registros:
-            # Convertir Timestamps y otros tipos a string para la hoja
-            row = []
-            for header in headers:
-                value = reg.get(header, '')
-                if hasattr(value, 'isoformat'): # Para Timestamps de Firebase
-                    value = value.isoformat()
-                row.append(str(value))
+        for doc in docs_a_procesar:
+            reg = doc.to_dict()
+            row = [reg.get(header, '') for header in headers]
             datos_para_sheets.append(row)
             
         # Crear o abrir la hoja de cálculo
@@ -88,23 +79,31 @@ def main():
         except gspread.exceptions.SpreadsheetNotFound:
             spreadsheet = client.create(NOMBRE_GOOGLE_SHEET)
             print(f"Hoja de cálculo '{NOMBRE_GOOGLE_SHEET}' creada.")
-
-        # Compartir la hoja si se proporcionó un email
-        if EMAIL_PARA_COMPARTIR:
-            try:
-                spreadsheet.share(EMAIL_PARA_COMPARTIR, perm_type='user', role='writer')
-                print(f"Hoja compartida con {EMAIL_PARA_COMPARTIR}.")
-            except Exception as e:
-                print(f"No se pudo compartir la hoja. Error: {e}")
-
+            # Compartir solo la primera vez que se crea
+            if EMAIL_PARA_COMPARTIR:
+                try:
+                    spreadsheet.share(EMAIL_PARA_COMPARTIR, perm_type='user', role='writer')
+                    print(f"Hoja compartida con {EMAIL_PARA_COMPARTIR}.")
+                except Exception as e:
+                    print(f"No se pudo compartir la hoja. Error: {e}")
 
         worksheet = spreadsheet.sheet1
         worksheet.clear()
         worksheet.update('A1', datos_para_sheets)
-        worksheet.format('A1:O1', {'textFormat': {'bold': True}})
+        worksheet.format(f'A1:{chr(ord("A") + len(headers) - 1)}1', {'textFormat': {'bold': True}})
 
-        print("\n¡Reporte generado exitosamente!")
+        print(f"\n¡Reporte generado exitosamente con {len(docs_a_procesar)} registros!")
         print(f"Puedes verlo en: {spreadsheet.url}")
+
+        # Actualizar el estado en Firebase DESPUÉS de escribir en la hoja
+        print(f"Actualizando estado de los registros a '{NUEVO_ESTADO}'...")
+        batch = db.batch()
+        for doc in docs_a_procesar:
+            doc_ref = db.collection('registros').document(doc.id)
+            batch.update(doc_ref, {'status': NUEVO_ESTADO})
+        
+        batch.commit()
+        print(f"{len(docs_a_procesar)} registros actualizados en Firebase.")
 
     except Exception as e:
         print(f"\nOcurrió un error grave durante la ejecución del script: {e}")
@@ -112,4 +111,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
