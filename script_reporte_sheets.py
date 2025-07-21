@@ -48,7 +48,6 @@ def main():
         
         # Autenticación con Google Sheets
         sheets_creds_dict = get_google_sheets_credentials()
-        # Añadir el scope de Google Drive es crucial para crear y compartir archivos.
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive.file"
@@ -59,7 +58,6 @@ def main():
         print(f"Buscando registros con estado: '{ESTADO_A_FILTRAR}'...")
         registros_ref = db.collection('registros').where('status', '==', ESTADO_A_FILTRAR).stream()
 
-        # Guardamos los documentos en una lista para poder iterar y actualizar después
         docs_a_procesar = list(registros_ref)
 
         if not docs_a_procesar:
@@ -68,7 +66,6 @@ def main():
 
         print(f"Se encontraron {len(docs_a_procesar)} registros. Procesando para Google Sheets...")
 
-        # Cabeceras específicas
         headers = ["imei1", "imei2", "serialNumber", "brand", "model"]
         
         datos_para_sheets = [headers]
@@ -77,20 +74,28 @@ def main():
             row = [reg.get(header, '') for header in headers]
             datos_para_sheets.append(row)
             
-        # Crear o abrir la hoja de cálculo
         try:
             spreadsheet = client.open(NOMBRE_GOOGLE_SHEET)
             print(f"Hoja de cálculo '{NOMBRE_GOOGLE_SHEET}' encontrada.")
         except gspread.exceptions.SpreadsheetNotFound:
-            spreadsheet = client.create(NOMBRE_GOOGLE_SHEET)
-            print(f"Hoja de cálculo '{NOMBRE_GOOGLE_SHEET}' creada.")
-            # Compartir solo la primera vez que se crea
-            if EMAIL_PARA_COMPARTIR:
-                try:
-                    spreadsheet.share(EMAIL_PARA_COMPARTIR, perm_type='user', role='writer')
-                    print(f"Hoja compartida con {EMAIL_PARA_COMPARTIR}.")
-                except Exception as e:
-                    print(f"No se pudo compartir la hoja. Error: {e}")
+            print(f"Hoja de cálculo '{NOMBRE_GOOGLE_SHEET}' no encontrada. Intentando crear una nueva...")
+            try:
+                spreadsheet = client.create(NOMBRE_GOOGLE_SHEET)
+                print(f"Hoja de cálculo '{NOMBRE_GOOGLE_SHEET}' creada.")
+                if EMAIL_PARA_COMPARTIR:
+                    try:
+                        spreadsheet.share(EMAIL_PARA_COMPARTIR, perm_type='user', role='writer')
+                        print(f"Hoja compartida con {EMAIL_PARA_COMPARTIR}.")
+                    except Exception as e:
+                        print(f"ADVERTENCIA: No se pudo compartir la hoja. Error: {e}. El propietario de la hoja será la cuenta de servicio.")
+            except gspread.exceptions.APIError as e:
+                if "storageQuotaExceeded" in str(e):
+                    print("\n--- ERROR CRÍTICO: CUOTA DE GOOGLE DRIVE EXCEDIDA ---")
+                    print("La cuenta de servicio no tiene espacio para crear nuevos archivos en Google Drive.")
+                    print("SOLUCIÓN: Debes iniciar sesión en Google Drive con la cuenta de servicio y eliminar los archivos 'huérfanos' que ha creado.")
+                    print("Consulta la sección 'Solución de Problemas' en el archivo README.md para obtener instrucciones detalladas.")
+                    print("---------------------------------------------------\n")
+                raise e # Relanza el error para que el workflow falle y te notifique
 
         worksheet = spreadsheet.sheet1
         worksheet.clear()
@@ -100,7 +105,6 @@ def main():
         print(f"\n¡Reporte generado exitosamente con {len(docs_a_procesar)} registros!")
         print(f"Puedes verlo en: {spreadsheet.url}")
 
-        # Actualizar el estado en Firebase DESPUÉS de escribir en la hoja
         print(f"Actualizando estado de los registros a '{NUEVO_ESTADO}'...")
         batch = db.batch()
         for doc in docs_a_procesar:
