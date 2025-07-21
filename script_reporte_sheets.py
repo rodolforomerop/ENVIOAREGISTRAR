@@ -3,16 +3,7 @@ import base64
 import json
 import gspread
 from google.oauth2.service_account import Credentials
-import firebase_admin
-from firebase_admin import credentials, firestore
-
-def get_firebase_credentials():
-    """Decodifica las credenciales de Firebase desde la variable de entorno."""
-    b64_creds = os.getenv('FIREBASE_SERVICE_ACCOUNT')
-    if not b64_creds:
-        raise ValueError("La variable de entorno FIREBASE_SERVICE_ACCOUNT no está configurada.")
-    decoded_creds = base64.b64decode(b64_creds)
-    return json.loads(decoded_creds)
+from firebase_config import initialize_firebase # Importar la función unificada
 
 def get_google_sheets_credentials():
     """Decodifica las credenciales de Google Sheets desde la variable de entorno."""
@@ -21,14 +12,6 @@ def get_google_sheets_credentials():
         raise ValueError("La variable de entorno GOOGLE_SHEETS_CREDENTIALS no está configurada.")
     decoded_creds = base64.b64decode(b64_creds)
     return json.loads(decoded_creds)
-
-def initialize_firebase():
-    """Inicializa la app de Firebase Admin si no está ya inicializada."""
-    if not firebase_admin._apps:
-        firebase_creds_dict = get_firebase_credentials()
-        cred = credentials.Certificate(firebase_creds_dict)
-        firebase_admin.initialize_app(cred)
-    return firestore.client()
 
 def main():
     """Función principal para generar el reporte."""
@@ -43,7 +26,7 @@ def main():
             print("Advertencia: La variable GOOGLE_SHEETS_SHARE_EMAIL no está configurada. La hoja no se compartirá.")
             
         print("Inicializando servicios...")
-        db = initialize_firebase()
+        db = initialize_firebase() # Usar la función unificada
         
         # Autenticación con Google Sheets
         sheets_creds_dict = get_google_sheets_credentials()
