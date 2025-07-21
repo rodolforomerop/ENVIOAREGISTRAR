@@ -45,7 +45,6 @@ def main():
         
         # Autenticación con Google Sheets
         sheets_creds_dict = get_google_sheets_credentials()
-        # ** FIX: Added the broader 'drive' scope to allow finding shared files. **
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
@@ -64,12 +63,26 @@ def main():
 
         print(f"Se encontraron {len(docs_a_procesar)} registros. Procesando para Google Sheets...")
 
-        headers = ["imei1", "imei2", "serialNumber", "brand", "model"]
+        # Mapeo de los nombres de campo en Firebase a las nuevas cabeceras deseadas.
+        field_to_header_map = {
+            "imei1": "IMEI 1",
+            "imei2": "IMEI 2",
+            "serialNumber": "Serie",
+            "brand": "Marca",
+            "model": "Modelo"
+        }
         
-        datos_para_sheets = [headers]
+        # Lista de campos de Firebase en el orden correcto para la hoja de cálculo.
+        firebase_fields_order = ["imei1", "imei2", "serialNumber", "brand", "model"]
+        
+        # Generar la fila de cabeceras a partir del mapeo.
+        headers_row = [field_to_header_map[field] for field in firebase_fields_order]
+        
+        datos_para_sheets = [headers_row]
         for doc in docs_a_procesar:
             reg = doc.to_dict()
-            row = [reg.get(header, '') for header in headers]
+            # Crear la fila de datos respetando el orden definido.
+            row = [reg.get(field, '') for field in firebase_fields_order]
             datos_para_sheets.append(row)
             
         try:
@@ -89,7 +102,7 @@ def main():
         worksheet = spreadsheet.sheet1
         worksheet.clear()
         worksheet.update('A1', datos_para_sheets)
-        worksheet.format(f'A1:{chr(ord("A") + len(headers) - 1)}1', {'textFormat': {'bold': True}})
+        worksheet.format(f'A1:{chr(ord("A") + len(headers_row) - 1)}1', {'textFormat': {'bold': True}})
 
         print(f"\n¡Reporte generado exitosamente con {len(docs_a_procesar)} registros!")
         print(f"Puedes verlo en: {spreadsheet.url}")
