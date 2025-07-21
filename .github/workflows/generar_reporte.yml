@@ -1,0 +1,32 @@
+name: Generar Reporte en Google Sheets
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Se ejecuta todos los días a las 5:00 AM UTC (medianoche en Chile continental)
+    - cron: '0 5 * * *'
+
+jobs:
+  generar-reporte:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Report Generation Script
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+          GOOGLE_SHEETS_SHARE_EMAIL: ${{ secrets.GOOGLE_SHEETS_SHARE_EMAIL }}
+        run: python script_reporte_sheets.py
