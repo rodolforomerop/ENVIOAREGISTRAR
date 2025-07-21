@@ -81,7 +81,8 @@ def main():
             print(f"\n--- ERROR CRÍTICO: HOJA DE CÁLCULO NO ENCONTRADA ---")
             print(f"El script no pudo encontrar la hoja de cálculo llamada '{NOMBRE_GOOGLE_SHEET}'.")
             print("SOLUCIÓN: Asegúrate de haber creado la hoja en tu Google Drive y de haberla compartido con la cuenta de servicio con permisos de 'Editor'.")
-            print(f"El correo de la cuenta de servicio es: {client.auth.service_account_email}")
+            # Corrección: Acceder al email desde el diccionario de credenciales, no desde el cliente.
+            print(f"El correo de la cuenta de servicio es: {sheets_creds_dict.get('client_email')}")
             print("---------------------------------------------------\n")
             raise
 
