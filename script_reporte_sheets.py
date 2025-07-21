@@ -11,7 +11,7 @@ def initialize_firebase():
     if not firebase_admin._apps:
         b64_creds = os.getenv('FIREBASE_SERVICE_ACCOUNT')
         if not b64_creds:
-            raise ValueError("La variable de entorno FIREBASE_SERVICE_ACCOUNT no está configurada.")
+            raise ValueError("La variable de entorno FIREBASE_SERVICE_ACCOUNT no está configurada. Por favor, configúrala en los secretos del repositorio de GitHub.")
         
         try:
             decoded_creds_str = base64.b64decode(b64_creds).decode('utf-8')
