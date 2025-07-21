@@ -45,9 +45,10 @@ def main():
         
         # Autenticación con Google Sheets
         sheets_creds_dict = get_google_sheets_credentials()
+        # ** FIX: Added the broader 'drive' scope to allow finding shared files. **
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive.file"
+            "https://www.googleapis.com/auth/drive"
         ]
         creds = Credentials.from_service_account_info(sheets_creds_dict, scopes=scopes)
         client = gspread.authorize(creds)
@@ -81,7 +82,6 @@ def main():
             print(f"\n--- ERROR CRÍTICO: HOJA DE CÁLCULO NO ENCONTRADA ---")
             print(f"El script no pudo encontrar la hoja de cálculo llamada '{NOMBRE_GOOGLE_SHEET}'.")
             print("SOLUCIÓN: Asegúrate de haber creado la hoja en tu Google Drive y de haberla compartido con la cuenta de servicio con permisos de 'Editor'.")
-            # Corrección: Acceder al email desde el diccionario de credenciales, no desde el cliente.
             print(f"El correo de la cuenta de servicio es: {sheets_creds_dict.get('client_email')}")
             print("---------------------------------------------------\n")
             raise
