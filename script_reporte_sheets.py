@@ -48,7 +48,11 @@ def main():
         
         # Autenticación con Google Sheets
         sheets_creds_dict = get_google_sheets_credentials()
-        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        # Añadir el scope de Google Drive es crucial para crear y compartir archivos.
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive.file"
+        ]
         creds = Credentials.from_service_account_info(sheets_creds_dict, scopes=scopes)
         client = gspread.authorize(creds)
 
