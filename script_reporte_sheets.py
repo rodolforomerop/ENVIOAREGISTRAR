@@ -39,9 +39,6 @@ def main():
         ESTADO_A_FILTRAR = "Recibido" 
         NUEVO_ESTADO = "En Proceso"
         NOMBRE_GOOGLE_SHEET = "Registros para Procesar"
-        EMAIL_PARA_COMPARTIR = os.getenv('GOOGLE_SHEETS_SHARE_EMAIL')
-        if not EMAIL_PARA_COMPARTIR:
-            print("Advertencia: La variable GOOGLE_SHEETS_SHARE_EMAIL no está configurada. La hoja no se compartirá.")
             
         print("Inicializando servicios...")
         db = initialize_firebase()
@@ -75,27 +72,18 @@ def main():
             datos_para_sheets.append(row)
             
         try:
+            # ABRIR la hoja de cálculo que ya existe y fue compartida.
+            print(f"Intentando abrir la hoja de cálculo '{NOMBRE_GOOGLE_SHEET}'...")
             spreadsheet = client.open(NOMBRE_GOOGLE_SHEET)
-            print(f"Hoja de cálculo '{NOMBRE_GOOGLE_SHEET}' encontrada.")
+            print(f"Hoja de cálculo '{NOMBRE_GOOGLE_SHEET}' abierta exitosamente.")
+
         except gspread.exceptions.SpreadsheetNotFound:
-            print(f"Hoja de cálculo '{NOMBRE_GOOGLE_SHEET}' no encontrada. Intentando crear una nueva...")
-            try:
-                spreadsheet = client.create(NOMBRE_GOOGLE_SHEET)
-                print(f"Hoja de cálculo '{NOMBRE_GOOGLE_SHEET}' creada.")
-                if EMAIL_PARA_COMPARTIR:
-                    try:
-                        spreadsheet.share(EMAIL_PARA_COMPARTIR, perm_type='user', role='writer')
-                        print(f"Hoja compartida con {EMAIL_PARA_COMPARTIR}.")
-                    except Exception as e:
-                        print(f"ADVERTENCIA: No se pudo compartir la hoja. Error: {e}. El propietario de la hoja será la cuenta de servicio.")
-            except gspread.exceptions.APIError as e:
-                if "storageQuotaExceeded" in str(e):
-                    print("\n--- ERROR CRÍTICO: CUOTA DE GOOGLE DRIVE EXCEDIDA ---")
-                    print("La cuenta de servicio no tiene espacio para crear nuevos archivos en Google Drive.")
-                    print("SOLUCIÓN: Debes iniciar sesión en Google Drive con la cuenta de servicio y eliminar los archivos 'huérfanos' que ha creado.")
-                    print("Consulta la sección 'Solución de Problemas' en el archivo README.md para obtener instrucciones detalladas.")
-                    print("---------------------------------------------------\n")
-                raise e # Relanza el error para que el workflow falle y te notifique
+            print(f"\n--- ERROR CRÍTICO: HOJA DE CÁLCULO NO ENCONTRADA ---")
+            print(f"El script no pudo encontrar la hoja de cálculo llamada '{NOMBRE_GOOGLE_SHEET}'.")
+            print("SOLUCIÓN: Asegúrate de haber creado la hoja en tu Google Drive y de haberla compartido con la cuenta de servicio con permisos de 'Editor'.")
+            print(f"El correo de la cuenta de servicio es: {client.auth.service_account_email}")
+            print("---------------------------------------------------\n")
+            raise
 
         worksheet = spreadsheet.sheet1
         worksheet.clear()
