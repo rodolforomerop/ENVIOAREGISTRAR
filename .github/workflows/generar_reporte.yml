@@ -16,9 +16,6 @@ schedule:
   # Domingos a las 20:25.
   - cron: '25 20 * * 0'
 
-# Especificación de la zona horaria para todas las reglas anteriores.
-timezone: America/Santiago
-
 jobs:
   generar-reporte:
     runs-on: ubuntu-latest
