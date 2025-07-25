@@ -5,13 +5,14 @@ import gspread
 import firebase_admin
 from google.oauth2.service_account import Credentials
 from firebase_admin import credentials, firestore
+from datetime import datetime
 
 def initialize_firebase():
     """Inicializa la app de Firebase Admin si no está ya inicializada."""
     if not firebase_admin._apps:
         b64_creds = os.getenv('FIREBASE_SERVICE_ACCOUNT')
         if not b64_creds:
-            raise ValueError("La variable de entorno FIREBASE_SERVICE_ACCOUNT no está configurada. Por favor, configúrala en los secretos del repositorio de GitHub.")
+            raise ValueError("La variable de entorno FIREBASE_SERVICE_ACCOUNT no está configurada.")
         
         try:
             decoded_creds_str = base64.b64decode(b64_creds).decode('utf-8')
@@ -38,8 +39,12 @@ def main():
         # --- Configuración ---
         ESTADO_A_FILTRAR = "Recibido" 
         NUEVO_ESTADO = "En Proceso"
-        NOMBRE_GOOGLE_SHEET = "Registros para Procesar"
-            
+        NOMBRE_HOJA_DETALLE_PREFIX = "Registros para Procesar"
+        EMAIL_A_COMPARTIR = os.getenv('GOOGLE_SHEETS_SHARE_EMAIL')
+        
+        # Nombre de la hoja de cálculo "Maestra" que simula la respuesta del formulario
+        NOMBRE_HOJA_MAESTRA = "Inscripción Embarque - Rodolfo Peña (respuestas)"
+
         print("Inicializando servicios...")
         db = initialize_firebase()
         
@@ -63,51 +68,74 @@ def main():
 
         print(f"Se encontraron {len(docs_a_procesar)} registros. Procesando para Google Sheets...")
 
-        # Mapeo de los nombres de campo en Firebase a las nuevas cabeceras deseadas.
-        field_to_header_map = {
-            "imei1": "IMEI 1",
-            "imei2": "IMEI 2",
-            "serialNumber": "Serie",
-            "brand": "Marca",
-            "model": "Modelo"
-        }
+        # 1. CREAR LA HOJA DE CÁLCULO DE DETALLE
+        # =========================================
         
-        # Lista de campos de Firebase en el orden correcto para la hoja de cálculo.
+        # Mapeo de campos y orden para la hoja de detalle
+        field_to_header_map = {
+            "imei1": "IMEI 1", "imei2": "IMEI 2", "serialNumber": "Serie", 
+            "brand": "Marca", "model": "Modelo"
+        }
         firebase_fields_order = ["imei1", "imei2", "serialNumber", "brand", "model"]
         
-        # Generar la fila de cabeceras a partir del mapeo.
         headers_row = [field_to_header_map[field] for field in firebase_fields_order]
-        
-        datos_para_sheets = [headers_row]
+        datos_para_sheets_detalle = [headers_row]
         for doc in docs_a_procesar:
             reg = doc.to_dict()
-            # Crear la fila de datos respetando el orden definido.
             row = [reg.get(field, '') for field in firebase_fields_order]
-            datos_para_sheets.append(row)
-            
+            datos_para_sheets_detalle.append(row)
+        
+        timestamp_actual = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        nombre_hoja_detalle = f"{NOMBRE_HOJA_DETALLE_PREFIX} - {timestamp_actual}"
+        
+        print(f"Creando nueva hoja de detalle: '{nombre_hoja_detalle}'...")
+        sh_detalle = client.create(nombre_hoja_detalle)
+        
+        if EMAIL_A_COMPARTIR:
+            print(f"Compartiendo hoja de detalle con {EMAIL_A_COMPARTIR}...")
+            sh_detalle.share(EMAIL_A_COMPARTIR, perm_type='user', role='writer')
+
+        worksheet_detalle = sh_detalle.sheet1
+        worksheet_detalle.update('A1', datos_para_sheets_detalle)
+        worksheet_detalle.format(f'A1:{chr(ord("A") + len(headers_row) - 1)}1', {'textFormat': {'bold': True}})
+        
+        print(f"Hoja de detalle creada exitosamente en: {sh_detalle.url}")
+
+        # 2. ACTUALIZAR LA HOJA MAESTRA
+        # ===============================
+
         try:
-            # ABRIR la hoja de cálculo que ya existe y fue compartida.
-            print(f"Intentando abrir la hoja de cálculo '{NOMBRE_GOOGLE_SHEET}'...")
-            spreadsheet = client.open(NOMBRE_GOOGLE_SHEET)
-            print(f"Hoja de cálculo '{NOMBRE_GOOGLE_SHEET}' abierta exitosamente.")
-
+            print(f"Abriendo la hoja maestra '{NOMBRE_HOJA_MAESTRA}'...")
+            sh_maestra = client.open(NOMBRE_HOJA_MAESTRA)
+            worksheet_maestra = sh_maestra.sheet1
+            print("Hoja maestra abierta.")
         except gspread.exceptions.SpreadsheetNotFound:
-            print(f"\n--- ERROR CRÍTICO: HOJA DE CÁLCULO NO ENCONTRADA ---")
-            print(f"El script no pudo encontrar la hoja de cálculo llamada '{NOMBRE_GOOGLE_SHEET}'.")
-            print("SOLUCIÓN: Asegúrate de haber creado la hoja en tu Google Drive y de haberla compartido con la cuenta de servicio con permisos de 'Editor'.")
-            print(f"El correo de la cuenta de servicio es: {sheets_creds_dict.get('client_email')}")
-            print("---------------------------------------------------\n")
-            raise
+            print(f"La hoja maestra '{NOMBRE_HOJA_MAESTRA}' no existe. Creándola...")
+            sh_maestra = client.create(NOMBRE_HOJA_MAESTRA)
+            worksheet_maestra = sh_maestra.sheet1
+            # Definir cabeceras para la hoja maestra
+            headers_maestra = ["Marca temporal", "Cantidad de equipos", "Listado IMEI(S)", "Estado"]
+            worksheet_maestra.append_row(headers_maestra)
+            worksheet_maestra.format('A1:D1', {'textFormat': {'bold': True}})
+            if EMAIL_A_COMPARTIR:
+                print(f"Compartiendo hoja maestra con {EMAIL_A_COMPARTIR}...")
+                sh_maestra.share(EMAIL_A_COMPARTIR, perm_type='user', role='writer')
 
-        worksheet = spreadsheet.sheet1
-        worksheet.clear()
-        worksheet.update('A1', datos_para_sheets)
-        worksheet.format(f'A1:{chr(ord("A") + len(headers_row) - 1)}1', {'textFormat': {'bold': True}})
+        # Añadir la nueva fila a la hoja maestra
+        nueva_fila_maestra = [
+            datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+            len(docs_a_procesar),
+            sh_detalle.url,
+            "Recibido"  # Estado inicial
+        ]
+        print(f"Añadiendo nueva fila a la hoja maestra: {nueva_fila_maestra}")
+        worksheet_maestra.append_row(nueva_fila_maestra, table_range='A1')
+        print("Hoja maestra actualizada.")
 
-        print(f"\n¡Reporte generado exitosamente con {len(docs_a_procesar)} registros!")
-        print(f"Puedes verlo en: {spreadsheet.url}")
-
-        print(f"Actualizando estado de los registros a '{NUEVO_ESTADO}'...")
+        # 3. ACTUALIZAR ESTADO EN FIREBASE
+        # ================================
+        
+        print(f"Actualizando estado de los {len(docs_a_procesar)} registros a '{NUEVO_ESTADO}' en Firebase...")
         batch = db.batch()
         for doc in docs_a_procesar:
             doc_ref = db.collection('registros').document(doc.id)
@@ -115,10 +143,13 @@ def main():
         
         batch.commit()
         print(f"{len(docs_a_procesar)} registros actualizados en Firebase.")
+        print("\n¡Proceso de automatización completado exitosamente!")
 
     except Exception as e:
         print(f"\nOcurrió un error grave durante la ejecución del script: {e}")
-        # Considera agregar notificaciones aquí si el script falla (ej. email, Slack)
+        raise
 
 if __name__ == "__main__":
     main()
+
+    
