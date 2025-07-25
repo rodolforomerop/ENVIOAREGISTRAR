@@ -35,15 +35,12 @@ def get_google_sheets_credentials():
 def main():
     """Función principal para generar el reporte."""
     db = None
+    client_email = "No disponible (error inicial)"
     try:
         # --- Configuración ---
         ESTADO_A_FILTRAR = "Recibido" 
         NUEVO_ESTADO = "En Proceso"
-        NOMBRE_NUEVA_HOJA = "Registros para Procesar"
-        EMAIL_A_COMPARTIR = os.getenv('GOOGLE_SHEETS_SHARE_EMAIL')
-
-        if not EMAIL_A_COMPARTIR:
-            raise ValueError("La variable de entorno GOOGLE_SHEETS_SHARE_EMAIL no está configurada. No se puede compartir el archivo.")
+        NOMBRE_HOJA_EXISTENTE = "Registros para Procesar"
 
         print("Inicializando servicios...")
         db = initialize_firebase()
@@ -70,23 +67,32 @@ def main():
 
         print(f"Se encontraron {len(docs_a_procesar)} registros. Procesando para Google Sheets...")
 
-        # 1. CREAR UNA NUEVA HOJA DE CÁLCULO
-        # ==================================
-        timestamp_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
-        nombre_completo_hoja = f"{NOMBRE_NUEVA_HOJA} - {timestamp_actual}"
-        
-        print(f"Creando nueva hoja de cálculo con el nombre: '{nombre_completo_hoja}'...")
+        # 1. ABRIR LA HOJA DE CÁLCULO EXISTENTE
+        # ======================================
+        print(f"Abriendo hoja de cálculo existente: '{NOMBRE_HOJA_EXISTENTE}'...")
         try:
-            sh = client.create(nombre_completo_hoja)
-            print(f"Hoja de cálculo '{nombre_completo_hoja}' creada exitosamente.")
+            sh = client.open(NOMBRE_HOJA_EXISTENTE)
+            print(f"Hoja de cálculo '{NOMBRE_HOJA_EXISTENTE}' abierta exitosamente.")
             print(f"URL: {sh.url}")
-        except Exception as e:
-            print(f"Error al crear la hoja de cálculo: {e}")
+        except gspread.exceptions.SpreadsheetNotFound:
+            print("\n" + "="*80)
+            print(f"ERROR CRÍTICO: No se encontró la hoja de cálculo '{NOMBRE_HOJA_EXISTENTE}'.")
+            print("Por favor, asegúrate de que:")
+            print(f"1. La hoja de cálculo con el nombre EXACTO '{NOMBRE_HOJA_EXISTENTE}' existe en Google Drive.")
+            print(f"2. Has compartido esa hoja de cálculo con la cuenta de servicio '{client_email}' con permisos de 'Editor'.")
+            print("="*80 + "\n")
             raise
+        except Exception as e:
+            print(f"Error al abrir la hoja de cálculo: {e}")
+            raise
+
 
         # 2. PREPARAR Y ESCRIBIR DATOS
         # ============================
         worksheet = sh.sheet1
+        
+        print("Limpiando la hoja de cálculo antes de escribir nuevos datos...")
+        worksheet.clear()
         
         field_to_header_map = {
             "imei1": "IMEI 1", "imei2": "IMEI 2", "serialNumber": "Serie", 
@@ -107,19 +113,7 @@ def main():
         worksheet.format(f'A1:{chr(ord("A") + len(headers_row) - 1)}1', {'textFormat': {'bold': True}})
         print("Datos escritos y formateados correctamente.")
         
-        # 3. COMPARTIR LA HOJA DE CÁLCULO
-        # ===============================
-        print(f"Compartiendo la hoja con '{EMAIL_A_COMPARTIR}' (Editor)...")
-        try:
-            sh.share(EMAIL_A_COMPARTIR, perm_type='user', role='writer', notify=True)
-            print("Hoja compartida exitosamente.")
-        except Exception as e:
-            print(f"ADVERTENCIA: No se pudo compartir la hoja con {EMAIL_A_COMPARTIR}. Error: {e}")
-            print("Asegúrate de que el email es válido y que tienes permisos de 'Manager' sobre el archivo.")
-            print(f"El propietario actual del archivo es la cuenta de servicio: {client_email}")
-
-
-        # 4. ACTUALIZAR ESTADO EN FIREBASE
+        # 3. ACTUALIZAR ESTADO EN FIREBASE
         # ================================
         
         print(f"Actualizando estado de los {len(docs_a_procesar)} registros a '{NUEVO_ESTADO}' en Firebase...")
@@ -140,7 +134,7 @@ def main():
         print(f"Detalle del error: {e}")
         print("\nINSTRUCCIONES:")
         print("1. Verifica que la API de Google Sheets y la API de Google Drive estén habilitadas en tu proyecto de Google Cloud.")
-        print(f"2. Asegúrate de que la cuenta de servicio '{client_email}' tenga permisos suficientes (rol de 'Editor' o superior en el proyecto de GCP).")
+        print(f"2. Asegúrate de que la cuenta de servicio '{client_email}' tenga permisos de 'Editor' sobre la hoja de cálculo '{NOMBRE_HOJA_EXISTENTE}'.")
         print("3. Revisa los logs de la ejecución en GitHub Actions para más detalles.")
         print("="*80 + "\n")
         raise
@@ -150,3 +144,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+    
