@@ -39,7 +39,7 @@ def main():
         # --- Configuración ---
         ESTADO_A_FILTRAR = "Recibido" 
         NUEVO_ESTADO = "En Proceso"
-        NOMBRE_HOJA_DETALLE_PREFIX = "Registros para Procesar"
+        NOMBRE_HOJA_DETALLE_PREFIX = "Registros"
         EMAIL_A_COMPARTIR = os.getenv('GOOGLE_SHEETS_SHARE_EMAIL')
         
         # Nombre de la hoja de cálculo "Maestra" que simula la respuesta del formulario
@@ -68,10 +68,27 @@ def main():
 
         print(f"Se encontraron {len(docs_a_procesar)} registros. Procesando para Google Sheets...")
 
-        # 1. CREAR LA HOJA DE CÁLCULO DE DETALLE
-        # =========================================
+        # 1. ABRIR HOJA MAESTRA Y CREAR NUEVA PESTAÑA DE DETALLE
+        # ========================================================
+        try:
+            print(f"Abriendo la hoja maestra '{NOMBRE_HOJA_MAESTRA}'...")
+            sh_maestra = client.open(NOMBRE_HOJA_MAESTRA)
+            worksheet_maestra = sh_maestra.sheet1 # La primera hoja/pestaña
+            print("Hoja maestra abierta.")
+        except gspread.exceptions.SpreadsheetNotFound:
+            print(f"ERROR CRÍTICO: La hoja maestra '{NOMBRE_HOJA_MAESTRA}' no existe o la cuenta de servicio no tiene permisos para verla.")
+            print("Asegúrate de que la hoja exista y de que hayas compartido el archivo con el email de la cuenta de servicio.")
+            client_email = creds.service_account_email
+            print(f"Comparte la hoja con: {client_email}")
+            raise
         
-        # Mapeo de campos y orden para la hoja de detalle
+        # Crear la nueva pestaña para los detalles
+        timestamp_actual = datetime.now().strftime("%Y-%m-%d_%H-%M")
+        nombre_hoja_detalle = f"{NOMBRE_HOJA_DETALLE_PREFIX} - {timestamp_actual}"
+        print(f"Creando nueva pestaña de detalle: '{nombre_hoja_detalle}'...")
+        worksheet_detalle = sh_maestra.add_worksheet(title=nombre_hoja_detalle, rows="100", cols="20")
+        
+        # Preparar datos para la nueva pestaña
         field_to_header_map = {
             "imei1": "IMEI 1", "imei2": "IMEI 2", "serialNumber": "Serie", 
             "brand": "Marca", "model": "Modelo"
@@ -85,52 +102,25 @@ def main():
             row = [reg.get(field, '') for field in firebase_fields_order]
             datos_para_sheets_detalle.append(row)
         
-        timestamp_actual = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        nombre_hoja_detalle = f"{NOMBRE_HOJA_DETALLE_PREFIX} - {timestamp_actual}"
-        
-        print(f"Creando nueva hoja de detalle: '{nombre_hoja_detalle}'...")
-        sh_detalle = client.create(nombre_hoja_detalle)
-        
-        if EMAIL_A_COMPARTIR:
-            print(f"Compartiendo hoja de detalle con {EMAIL_A_COMPARTIR}...")
-            sh_detalle.share(EMAIL_A_COMPARTIR, perm_type='user', role='writer')
-
-        worksheet_detalle = sh_detalle.sheet1
+        # Escribir y formatear la nueva pestaña de detalle
         worksheet_detalle.update('A1', datos_para_sheets_detalle)
         worksheet_detalle.format(f'A1:{chr(ord("A") + len(headers_row) - 1)}1', {'textFormat': {'bold': True}})
-        
-        print(f"Hoja de detalle creada exitosamente en: {sh_detalle.url}")
+        print(f"Pestaña de detalle creada exitosamente en la hoja maestra.")
 
-        # 2. ACTUALIZAR LA HOJA MAESTRA
+
+        # 2. ACTUALIZAR LA HOJA PRINCIPAL
         # ===============================
 
-        try:
-            print(f"Abriendo la hoja maestra '{NOMBRE_HOJA_MAESTRA}'...")
-            sh_maestra = client.open(NOMBRE_HOJA_MAESTRA)
-            worksheet_maestra = sh_maestra.sheet1
-            print("Hoja maestra abierta.")
-        except gspread.exceptions.SpreadsheetNotFound:
-            print(f"La hoja maestra '{NOMBRE_HOJA_MAESTRA}' no existe. Creándola...")
-            sh_maestra = client.create(NOMBRE_HOJA_MAESTRA)
-            worksheet_maestra = sh_maestra.sheet1
-            # Definir cabeceras para la hoja maestra
-            headers_maestra = ["Marca temporal", "Cantidad de equipos", "Listado IMEI(S)", "Estado"]
-            worksheet_maestra.append_row(headers_maestra)
-            worksheet_maestra.format('A1:D1', {'textFormat': {'bold': True}})
-            if EMAIL_A_COMPARTIR:
-                print(f"Compartiendo hoja maestra con {EMAIL_A_COMPARTIR}...")
-                sh_maestra.share(EMAIL_A_COMPARTIR, perm_type='user', role='writer')
-
-        # Añadir la nueva fila a la hoja maestra
+        # Añadir la nueva fila a la hoja principal (la primera pestaña)
         nueva_fila_maestra = [
             datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
             len(docs_a_procesar),
-            sh_detalle.url,
+            f"Ver pestaña '{nombre_hoja_detalle}'", # Referencia a la nueva pestaña
             "Recibido"  # Estado inicial
         ]
-        print(f"Añadiendo nueva fila a la hoja maestra: {nueva_fila_maestra}")
+        print(f"Añadiendo nueva fila a la hoja principal: {nueva_fila_maestra}")
         worksheet_maestra.append_row(nueva_fila_maestra, table_range='A1')
-        print("Hoja maestra actualizada.")
+        print("Hoja principal actualizada.")
 
         # 3. ACTUALIZAR ESTADO EN FIREBASE
         # ================================
