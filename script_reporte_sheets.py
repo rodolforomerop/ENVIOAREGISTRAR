@@ -39,11 +39,11 @@ def main():
         # --- Configuración ---
         ESTADO_A_FILTRAR = "Recibido" 
         NUEVO_ESTADO = "En Proceso"
-        NOMBRE_HOJA_DETALLE_PREFIX = "Registros"
+        NOMBRE_NUEVA_HOJA = "Registros para Procesar"
         EMAIL_A_COMPARTIR = os.getenv('GOOGLE_SHEETS_SHARE_EMAIL')
-        
-        # Nombre de la hoja de cálculo "Maestra" que simula la respuesta del formulario
-        NOMBRE_HOJA_MAESTRA = "Inscripción Embarque - Rodolfo Peña (respuestas)"
+
+        if not EMAIL_A_COMPARTIR:
+            raise ValueError("La variable de entorno GOOGLE_SHEETS_SHARE_EMAIL no está configurada. No se puede compartir el archivo.")
 
         print("Inicializando servicios...")
         db = initialize_firebase()
@@ -56,6 +56,8 @@ def main():
         ]
         creds = Credentials.from_service_account_info(sheets_creds_dict, scopes=scopes)
         client = gspread.authorize(creds)
+        client_email = creds.service_account_email
+
 
         print(f"Buscando registros con estado: '{ESTADO_A_FILTRAR}'...")
         registros_ref = db.collection('registros').where('status', '==', ESTADO_A_FILTRAR).stream()
@@ -68,27 +70,24 @@ def main():
 
         print(f"Se encontraron {len(docs_a_procesar)} registros. Procesando para Google Sheets...")
 
-        # 1. ABRIR HOJA MAESTRA Y CREAR NUEVA PESTAÑA DE DETALLE
-        # ========================================================
+        # 1. CREAR UNA NUEVA HOJA DE CÁLCULO
+        # ==================================
+        timestamp_actual = datetime.now().strftime("%Y-%m-%d %H:%M")
+        nombre_completo_hoja = f"{NOMBRE_NUEVA_HOJA} - {timestamp_actual}"
+        
+        print(f"Creando nueva hoja de cálculo con el nombre: '{nombre_completo_hoja}'...")
         try:
-            print(f"Abriendo la hoja maestra '{NOMBRE_HOJA_MAESTRA}'...")
-            sh_maestra = client.open(NOMBRE_HOJA_MAESTRA)
-            worksheet_maestra = sh_maestra.sheet1 # La primera hoja/pestaña
-            print("Hoja maestra abierta.")
-        except gspread.exceptions.SpreadsheetNotFound:
-            print(f"ERROR CRÍTICO: La hoja maestra '{NOMBRE_HOJA_MAESTRA}' no existe o la cuenta de servicio no tiene permisos para verla.")
-            print("Asegúrate de que la hoja exista y de que hayas compartido el archivo con el email de la cuenta de servicio.")
-            client_email = creds.service_account_email
-            print(f"Comparte la hoja con: {client_email}")
+            sh = client.create(nombre_completo_hoja)
+            print(f"Hoja de cálculo '{nombre_completo_hoja}' creada exitosamente.")
+            print(f"URL: {sh.url}")
+        except Exception as e:
+            print(f"Error al crear la hoja de cálculo: {e}")
             raise
+
+        # 2. PREPARAR Y ESCRIBIR DATOS
+        # ============================
+        worksheet = sh.sheet1
         
-        # Crear la nueva pestaña para los detalles
-        timestamp_actual = datetime.now().strftime("%Y-%m-%d_%H-%M")
-        nombre_hoja_detalle = f"{NOMBRE_HOJA_DETALLE_PREFIX} - {timestamp_actual}"
-        print(f"Creando nueva pestaña de detalle: '{nombre_hoja_detalle}'...")
-        worksheet_detalle = sh_maestra.add_worksheet(title=nombre_hoja_detalle, rows="100", cols="20")
-        
-        # Preparar datos para la nueva pestaña
         field_to_header_map = {
             "imei1": "IMEI 1", "imei2": "IMEI 2", "serialNumber": "Serie", 
             "brand": "Marca", "model": "Modelo"
@@ -96,33 +95,31 @@ def main():
         firebase_fields_order = ["imei1", "imei2", "serialNumber", "brand", "model"]
         
         headers_row = [field_to_header_map[field] for field in firebase_fields_order]
-        datos_para_sheets_detalle = [headers_row]
+        datos_para_sheets = [headers_row]
+        
         for doc in docs_a_procesar:
             reg = doc.to_dict()
             row = [reg.get(field, '') for field in firebase_fields_order]
-            datos_para_sheets_detalle.append(row)
+            datos_para_sheets.append(row)
         
-        # Escribir y formatear la nueva pestaña de detalle
-        worksheet_detalle.update('A1', datos_para_sheets_detalle)
-        worksheet_detalle.format(f'A1:{chr(ord("A") + len(headers_row) - 1)}1', {'textFormat': {'bold': True}})
-        print(f"Pestaña de detalle creada exitosamente en la hoja maestra.")
-
-
-        # 2. ACTUALIZAR LA HOJA PRINCIPAL
+        print("Escribiendo datos en la hoja de cálculo...")
+        worksheet.update('A1', datos_para_sheets)
+        worksheet.format(f'A1:{chr(ord("A") + len(headers_row) - 1)}1', {'textFormat': {'bold': True}})
+        print("Datos escritos y formateados correctamente.")
+        
+        # 3. COMPARTIR LA HOJA DE CÁLCULO
         # ===============================
+        print(f"Compartiendo la hoja con '{EMAIL_A_COMPARTIR}' (Editor)...")
+        try:
+            sh.share(EMAIL_A_COMPARTIR, perm_type='user', role='writer', notify=True)
+            print("Hoja compartida exitosamente.")
+        except Exception as e:
+            print(f"ADVERTENCIA: No se pudo compartir la hoja con {EMAIL_A_COMPARTIR}. Error: {e}")
+            print("Asegúrate de que el email es válido y que tienes permisos de 'Manager' sobre el archivo.")
+            print(f"El propietario actual del archivo es la cuenta de servicio: {client_email}")
 
-        # Añadir la nueva fila a la hoja principal (la primera pestaña)
-        nueva_fila_maestra = [
-            datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
-            len(docs_a_procesar),
-            f"Ver pestaña '{nombre_hoja_detalle}'", # Referencia a la nueva pestaña
-            "Recibido"  # Estado inicial
-        ]
-        print(f"Añadiendo nueva fila a la hoja principal: {nueva_fila_maestra}")
-        worksheet_maestra.append_row(nueva_fila_maestra, table_range='A1')
-        print("Hoja principal actualizada.")
 
-        # 3. ACTUALIZAR ESTADO EN FIREBASE
+        # 4. ACTUALIZAR ESTADO EN FIREBASE
         # ================================
         
         print(f"Actualizando estado de los {len(docs_a_procesar)} registros a '{NUEVO_ESTADO}' en Firebase...")
@@ -135,11 +132,21 @@ def main():
         print(f"{len(docs_a_procesar)} registros actualizados en Firebase.")
         print("\n¡Proceso de automatización completado exitosamente!")
 
+    except gspread.exceptions.GSpreadException as e:
+        print("\n" + "="*80)
+        print("ERROR CRÍTICO DE GOOGLE SHEETS:")
+        print("="*80)
+        print("Hubo un problema al interactuar con la API de Google Sheets.")
+        print(f"Detalle del error: {e}")
+        print("\nINSTRUCCIONES:")
+        print("1. Verifica que la API de Google Sheets y la API de Google Drive estén habilitadas en tu proyecto de Google Cloud.")
+        print(f"2. Asegúrate de que la cuenta de servicio '{client_email}' tenga permisos suficientes (rol de 'Editor' o superior en el proyecto de GCP).")
+        print("3. Revisa los logs de la ejecución en GitHub Actions para más detalles.")
+        print("="*80 + "\n")
+        raise
     except Exception as e:
         print(f"\nOcurrió un error grave durante la ejecución del script: {e}")
         raise
 
 if __name__ == "__main__":
     main()
-
-    
