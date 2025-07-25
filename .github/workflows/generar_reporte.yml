@@ -2,17 +2,7 @@
 name: Generar Reporte en Google Sheets
 
 on:
-  workflow_dispatch:
-  schedule:
-    # Se ejecuta de Lunes a Viernes, cada hora en el minuto 25, desde las 10:25 hasta las 20:25 (Hora de Chile, UTC-3/4).
-    # Esto corresponde a 13:25-23:25 UTC durante el horario de verano de Chile (UTC-3).
-    - cron: '25 13-23 * * 1-5'
-    # Se ejecuta los Sábados en horarios específicos (12:25, 18:25, 20:45), considerando UTC-3.
-    - cron: '25 15 * * 6'
-    - cron: '25 21 * * 6'
-    - cron: '45 23 * * 6'
-    # Se ejecuta los Domingos a las 20:25, considerando UTC-3.
-    - cron: '25 23 * * 0'
+  workflow_dispatch:  # Se ejecutará solo cuando se le llame por API
 
 jobs:
   generar-reporte:
