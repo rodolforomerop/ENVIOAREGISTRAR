@@ -94,34 +94,34 @@ def main():
 
         # 2. PREPARAR Y AÑADIR DATOS
         # ============================
-        field_to_header_map = {
-            "orderNumber": "Nº de Orden",
-            "imei1": "IMEI 1",
-            "imei2": "IMEI 2",
-            "serialNumber": "Serie",
-            "brand": "Marca",
-            "model": "Modelo",
-            "status": "Estado",
-            "createdAt": "Fecha",
-            "revision": "Revisión IMEI"
-        }
-        firebase_fields_order = ["orderNumber", "imei1", "imei2", "serialNumber", "brand", "model", "status", "createdAt"]
+        firebase_fields_order = [
+            "orderNumber",  # Col A
+            "imei1",        # Col B
+            "imei2",        # Col C
+            "serialNumber", # Col D
+            "brand",        # Col E
+            "model",        # Col F
+            "status",       # Col G
+            "createdAt"     # Col H
+        ]
 
         datos_para_sheets = []
         for doc in docs_a_procesar:
             reg = doc.to_dict()
-            row = [format_timestamp(reg.get(field, '')) for field in firebase_fields_order]
-            # Añadir la columna estática "Revisión IMEI" con el valor "OK"
-            row.append("OK")
-            datos_para_sheets.append(row)
+            # Construye la fila con los datos de Firebase
+            row_data = [format_timestamp(reg.get(field, '')) for field in firebase_fields_order]
+            
+            # Construye la fila completa con columnas vacías y valores estáticos
+            # A, B, C, D, E, F, G, H (datos de firebase)
+            # I, J, K, L (vacías)
+            # M (Canal)
+            # N, O (vacías)
+            # P (Revisión IMEI)
+            full_row = row_data + ['', '', '', '', 'RIM APP', '', '', 'OK']
+            datos_para_sheets.append(full_row)
         
-        # Verificar si la hoja está vacía para añadir encabezados
-        if not worksheet.get_all_values():
-            print("La hoja está vacía. Añadiendo encabezados...")
-            headers_row = [field_to_header_map[field] for field in firebase_fields_order]
-            headers_row.append(field_to_header_map["revision"])
-            worksheet.append_row(headers_row, value_input_option='USER_ENTERED')
-            worksheet.format('A1:I1', {'textFormat': {'bold': True}})
+        # El script ahora asume que los encabezados ya existen.
+        # No se añaden encabezados nuevos para no alterar la estructura.
 
         print(f"Añadiendo {len(datos_para_sheets)} nuevas filas a la hoja de cálculo...")
         worksheet.append_rows(datos_para_sheets, value_input_option='USER_ENTERED')
