@@ -32,15 +32,21 @@ def get_google_sheets_credentials():
     decoded_creds = base64.b64decode(b64_creds)
     return json.loads(decoded_creds)
 
+def format_timestamp(timestamp):
+    """Formatea un Timestamp de Firestore a un string legible."""
+    if timestamp and hasattr(timestamp, 'strftime'):
+        return timestamp.strftime('%Y-%m-%d %H:%M:%S')
+    return timestamp # Devuelve el valor original si no es un objeto de fecha
+
 def main():
     """Función principal para generar el reporte."""
     db = None
     client_email = "No disponible (error inicial)"
     try:
         # --- Configuración ---
-        ESTADO_A_FILTRAR = "Recibido" 
-        NUEVO_ESTADO = "En Proceso"
-        NOMBRE_HOJA_EXISTENTE = "Registros para Procesar"
+        ESTADO_A_FILTRAR = "Recibido"
+        NUEVO_ESTADO_FIREBASE = "En Proceso"
+        NOMBRE_HOJA_EXISTENTE = "Registros de IMEI Data Base"
 
         print("Inicializando servicios...")
         db = initialize_firebase()
@@ -54,7 +60,6 @@ def main():
         creds = Credentials.from_service_account_info(sheets_creds_dict, scopes=scopes)
         client = gspread.authorize(creds)
         client_email = creds.service_account_email
-
 
         print(f"Buscando registros con estado: '{ESTADO_A_FILTRAR}'...")
         registros_ref = db.collection('registros').where('status', '==', ESTADO_A_FILTRAR).stream()
@@ -72,6 +77,7 @@ def main():
         print(f"Abriendo hoja de cálculo existente: '{NOMBRE_HOJA_EXISTENTE}'...")
         try:
             sh = client.open(NOMBRE_HOJA_EXISTENTE)
+            worksheet = sh.sheet1
             print(f"Hoja de cálculo '{NOMBRE_HOJA_EXISTENTE}' abierta exitosamente.")
             print(f"URL: {sh.url}")
         except gspread.exceptions.SpreadsheetNotFound:
@@ -86,45 +92,54 @@ def main():
             print(f"Error al abrir la hoja de cálculo: {e}")
             raise
 
-
-        # 2. PREPARAR Y ESCRIBIR DATOS
+        # 2. PREPARAR Y AÑADIR DATOS
         # ============================
-        worksheet = sh.sheet1
-        
-        print("Limpiando la hoja de cálculo antes de escribir nuevos datos...")
-        worksheet.clear()
-        
         field_to_header_map = {
-            "imei1": "IMEI 1", "imei2": "IMEI 2", "serialNumber": "Serie", 
-            "brand": "Marca", "model": "Modelo"
+            "orderNumber": "Nº de Orden",
+            "imei1": "IMEI 1",
+            "imei2": "IMEI 2",
+            "serialNumber": "Serie",
+            "brand": "Marca",
+            "model": "Modelo",
+            "status": "Estado",
+            "createdAt": "Fecha",
+            "revision": "Revisión IMEI"
         }
-        firebase_fields_order = ["imei1", "imei2", "serialNumber", "brand", "model"]
-        
-        headers_row = [field_to_header_map[field] for field in firebase_fields_order]
-        datos_para_sheets = [headers_row]
-        
+        firebase_fields_order = ["orderNumber", "imei1", "imei2", "serialNumber", "brand", "model", "status", "createdAt"]
+
+        datos_para_sheets = []
         for doc in docs_a_procesar:
             reg = doc.to_dict()
-            row = [reg.get(field, '') for field in firebase_fields_order]
+            row = [format_timestamp(reg.get(field, '')) for field in firebase_fields_order]
+            # Añadir la columna estática "Revisión IMEI" con el valor "OK"
+            row.append("OK")
             datos_para_sheets.append(row)
         
-        print("Escribiendo datos en la hoja de cálculo...")
-        worksheet.update('A1', datos_para_sheets)
-        worksheet.format(f'A1:{chr(ord("A") + len(headers_row) - 1)}1', {'textFormat': {'bold': True}})
-        print("Datos escritos y formateados correctamente.")
+        # Verificar si la hoja está vacía para añadir encabezados
+        if not worksheet.get_all_values():
+            print("La hoja está vacía. Añadiendo encabezados...")
+            headers_row = [field_to_header_map[field] for field in firebase_fields_order]
+            headers_row.append(field_to_header_map["revision"])
+            worksheet.append_row(headers_row, value_input_option='USER_ENTERED')
+            worksheet.format('A1:I1', {'textFormat': {'bold': True}})
+
+        print(f"Añadiendo {len(datos_para_sheets)} nuevas filas a la hoja de cálculo...")
+        worksheet.append_rows(datos_para_sheets, value_input_option='USER_ENTERED')
+        
+        print("Datos añadidos correctamente.")
         
         # 3. ACTUALIZAR ESTADO EN FIREBASE
-        # ================================
-        
-        print(f"Actualizando estado de los {len(docs_a_procesar)} registros a '{NUEVO_ESTADO}' en Firebase...")
-        batch = db.batch()
+        # =================================
+        print(f"Actualizando {len(docs_a_procesar)} registros en Firebase al estado '{NUEVO_ESTADO_FIREBASE}'...")
         for doc in docs_a_procesar:
-            doc_ref = db.collection('registros').document(doc.id)
-            batch.update(doc_ref, {'status': NUEVO_ESTADO})
-        
-        batch.commit()
-        print(f"{len(docs_a_procesar)} registros actualizados en Firebase.")
-        print("\n¡Proceso de automatización completado exitosamente!")
+            try:
+                doc.reference.update({'status': NUEVO_ESTADO_FIREBASE})
+                print(f"  - Registro {doc.id} actualizado a '{NUEVO_ESTADO_FIREBASE}'.")
+            except Exception as e:
+                print(f"  - ERROR al actualizar el registro {doc.id}: {e}")
+
+        print("\n¡Proceso de reporte completado exitosamente!")
+        print(f"Se han añadido {len(docs_a_procesar)} registros a '{NOMBRE_HOJA_EXISTENTE}' y se han actualizado en Firebase.")
 
     except gspread.exceptions.GSpreadException as e:
         print("\n" + "="*80)
@@ -144,5 +159,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-    
