@@ -42,11 +42,12 @@ def main():
     """Función principal para generar el reporte."""
     db = None
     client_email = "No disponible (error inicial)"
+    NOMBRE_HOJA_EXISTENTE = "Registros de IMEI Data Base"
     try:
         # --- Configuración ---
         ESTADO_A_FILTRAR = "Recibido"
         NUEVO_ESTADO_FIREBASE = "En Proceso"
-        NOMBRE_HOJA_EXISTENTE = "Registros de IMEI Data Base"
+        
 
         print("Inicializando servicios...")
         db = initialize_firebase()
@@ -118,9 +119,12 @@ def main():
             full_row = row_data + ['', '', '', '', 'RIM APP', '', '', 'OK']
             datos_para_sheets.append(full_row)
         
-        # Determinar la última fila con contenido para insertar justo después
-        last_row_index = len(worksheet.get_all_values())
-        print(f"La última fila con datos es la {last_row_index}. Se insertarán {len(datos_para_sheets)} nuevas filas a partir de la fila {last_row_index + 1}.")
+        # Determinar la última fila con contenido basándose en la columna A
+        # Esto evita problemas si hay filas vacías al final de la hoja.
+        col_a_values = worksheet.col_values(1)
+        last_row_index = len(col_a_values)
+
+        print(f"La última fila con datos en la Columna A es la {last_row_index}. Se insertarán {len(datos_para_sheets)} nuevas filas a partir de la fila {last_row_index + 1}.")
         
         # Usar insert_rows para añadir los datos, lo que ayuda a mantener el formato de la tabla
         worksheet.insert_rows(
@@ -134,12 +138,13 @@ def main():
         # 3. ACTUALIZAR ESTADO EN FIREBASE
         # =================================
         print(f"Actualizando {len(docs_a_procesar)} registros en Firebase al estado '{NUEVO_ESTADO_FIREBASE}'...")
+        batch = db.batch()
         for doc in docs_a_procesar:
-            try:
-                doc.reference.update({'status': NUEVO_ESTADO_FIREBASE})
-                print(f"  - Registro {doc.id} actualizado a '{NUEVO_ESTADO_FIREBASE}'.")
-            except Exception as e:
-                print(f"  - ERROR al actualizar el registro {doc.id}: {e}")
+            batch.update(doc.reference, {'status': NUEVO_ESTADO_FIREBASE})
+            print(f"  - Registro {doc.id} preparado para actualizar a '{NUEVO_ESTADO_FIREBASE}'.")
+        
+        batch.commit()
+        print("Lote de actualizaciones en Firebase completado.")
 
         print("\n¡Proceso de reporte completado exitosamente!")
         print(f"Se han añadido {len(docs_a_procesar)} registros a '{NOMBRE_HOJA_EXISTENTE}' y se han actualizado en Firebase.")
