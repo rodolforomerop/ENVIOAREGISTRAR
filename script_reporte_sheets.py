@@ -108,23 +108,26 @@ def main():
         datos_para_sheets = []
         for doc in docs_a_procesar:
             reg = doc.to_dict()
-            # Construye la fila con los datos de Firebase
             row_data = [format_timestamp(reg.get(field, '')) for field in firebase_fields_order]
             
-            # Construye la fila completa con columnas vacías y valores estáticos
-            # A, B, C, D, E, F, G, H (datos de firebase)
-            # I, J, K, L (vacías)
-            # M (Canal)
-            # N, O (vacías)
-            # P (Revisión IMEI)
+            # Construye la fila completa incluyendo los valores estáticos y las columnas vacías
+            # Columnas I, J, K, L vacías
+            # Columna M con valor "RIM APP"
+            # Columnas N, O vacías
+            # Columna P con valor "OK"
             full_row = row_data + ['', '', '', '', 'RIM APP', '', '', 'OK']
             datos_para_sheets.append(full_row)
         
-        # El script ahora asume que los encabezados ya existen.
-        # No se añaden encabezados nuevos para no alterar la estructura.
-
-        print(f"Añadiendo {len(datos_para_sheets)} nuevas filas a la hoja de cálculo...")
-        worksheet.append_rows(datos_para_sheets, value_input_option='USER_ENTERED')
+        # Determinar la última fila con contenido para insertar justo después
+        last_row_index = len(worksheet.get_all_values())
+        print(f"La última fila con datos es la {last_row_index}. Se insertarán {len(datos_para_sheets)} nuevas filas a partir de la fila {last_row_index + 1}.")
+        
+        # Usar insert_rows para añadir los datos, lo que ayuda a mantener el formato de la tabla
+        worksheet.insert_rows(
+            datos_para_sheets, 
+            row=last_row_index + 1, 
+            value_input_option='USER_ENTERED'
+        )
         
         print("Datos añadidos correctamente.")
         
@@ -159,3 +162,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
