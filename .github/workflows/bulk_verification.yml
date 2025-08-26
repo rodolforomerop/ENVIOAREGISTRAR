@@ -1,13 +1,10 @@
-name: Verificacion Masiva de IMEI desde Google Sheet
+name: Verificacion Masiva de IMEI desde Firestore
 
 on:
   workflow_dispatch:
     inputs:
-      companyId:
-        description: 'ID de la Empresa'
-        required: true
-      spreadsheetUrl:
-        description: 'URL de la Hoja de Calculo'
+      batchId:
+        description: 'ID del Lote de Verificación en Firestore'
         required: true
 
 jobs:
@@ -31,7 +28,5 @@ jobs:
       - name: Run Bulk IMEI Verification Script
         env:
           FIREBASE_CREDENTIALS_B64: ${{ secrets.FIREBASE_CREDENTIALS_B64 }}
-          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
-          COMPANY_ID: ${{ github.event.inputs.companyId }}
-          SPREADSHEET_URL: ${{ github.event.inputs.spreadsheetUrl }}
+          BATCH_ID: ${{ github.event.inputs.batchId }}
         run: python bulk_imei_verification.py
