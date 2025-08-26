@@ -23,6 +23,30 @@ def initialize_firebase():
             raise ValueError(f"Error al decodificar o parsear FIREBASE_CREDENTIALS_B64: {e}")
     return firestore.client()
 
+def trigger_results_writing(batch_id):
+    """Llama al endpoint de la app Next.js para que escriba los resultados en la hoja."""
+    host_url = os.getenv('HOST_URL', 'https://registroimeimultibanda.cl')
+    api_key = os.getenv('REGISTRATION_API_KEY')
+    
+    if not api_key:
+        print("  - ⚠️ No se puede disparar la escritura de resultados: REGISTRATION_API_KEY no configurada.")
+        return
+
+    api_url = f"{host_url}/api/process-batch-result"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+    payload = {"batchId": batch_id}
+
+    try:
+        response = requests.post(api_url, json=payload, headers=headers, timeout=60)
+        response.raise_for_status()
+        print(f"  - ✅ Escritura de resultados para el lote {batch_id} iniciada exitosamente.")
+    except requests.exceptions.RequestException as e:
+        print(f"  - ❌ Error al iniciar la escritura de resultados para el lote {batch_id}: {e}")
+
+
 def check_imei_status(imei):
     """Verifica un solo IMEI usando la API externa."""
     if not imei or not str(imei).strip():
@@ -44,10 +68,13 @@ def main():
     """Función principal del script de verificación masiva desde Firestore."""
     print("🚀 Iniciando Verificación Masiva de IMEI desde Firestore...")
     
+    batch_id = os.getenv('BATCH_ID')
+    db = None
+    batch_ref = None
+
     try:
         db = initialize_firebase()
         
-        batch_id = os.getenv('BATCH_ID')
         if not batch_id:
             raise ValueError("BATCH_ID es una variable de entorno requerida.")
 
@@ -57,7 +84,8 @@ def main():
         imeis_ref = batch_ref.collection('imeis')
 
         # Buscar solo los IMEIs pendientes de este lote
-        docs_to_process = imeis_ref.where('status', '==', 'pending_verification').stream()
+        docs_to_process_stream = imeis_ref.where('status', '==', 'pending_verification').stream()
+        docs_to_process = list(docs_to_process_stream)
         
         processed_count = 0
         for doc in docs_to_process:
@@ -100,12 +128,18 @@ def main():
         batch_ref.update({'status': 'completed', 'completedAt': datetime.now(timezone.utc)})
         print(f"\n🎉 Lote {batch_id} marcado como completado.")
 
+        # Disparar la escritura de resultados en la hoja de cálculo
+        trigger_results_writing(batch_id)
+
     except Exception as e:
         print(f"❌ Error fatal durante la ejecución: {e}")
-        # Opcional: Marcar el lote como fallido si ocurre un error grave
-        if 'batch_ref' in locals() and batch_ref:
-            batch_ref.update({'status': 'failed', 'error': str(e)})
+        if batch_ref:
+            try:
+                batch_ref.update({'status': 'failed', 'error': str(e)})
+            except Exception as update_err:
+                print(f"Error adicional al intentar marcar el lote como fallido: {update_err}")
         raise
 
 if __name__ == "__main__":
     main()
+
