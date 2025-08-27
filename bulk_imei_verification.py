@@ -24,7 +24,7 @@ def initialize_firebase():
     return firestore.client()
 
 def check_imei_status(imei):
-    """Verifica un solo IMEI usando la API externa."""
+    """Verifica un solo IMEI usando la API externa y acorta el resultado."""
     if not imei or not str(imei).strip():
         return "Vacío"
         
@@ -32,7 +32,16 @@ def check_imei_status(imei):
     try:
         response = requests.post(url, json={"imei": str(imei).strip()}, timeout=20)
         response.raise_for_status()
-        return response.json().get('resultado', 'Error: Respuesta inesperada')
+        
+        # Procesar y acortar la respuesta
+        full_result = response.json().get('resultado', 'Error: Respuesta inesperada')
+        if "no está inscrito" in full_result.lower():
+            return "Equipo NO inscrito"
+        elif "equipo se encuentra inscrito" in full_result.lower():
+            return "Equipo inscrito correctamente"
+        else:
+            return full_result # Devolver el resultado completo si no es uno de los esperados
+
     except requests.exceptions.RequestException as e:
         print(f"  - Error de red para IMEI {imei}: {e}")
         return "Error de Conexión"
