@@ -23,30 +23,6 @@ def initialize_firebase():
             raise ValueError(f"Error al decodificar o parsear FIREBASE_CREDENTIALS_B64: {e}")
     return firestore.client()
 
-def trigger_results_writing(batch_id):
-    """Llama al endpoint de la app Next.js para que escriba los resultados en la hoja."""
-    host_url = os.getenv('HOST_URL', 'https://registroimeimultibanda.cl')
-    api_key = os.getenv('REGISTRATION_API_KEY')
-    
-    if not api_key:
-        print("  - ⚠️ No se puede disparar la escritura de resultados: REGISTRATION_API_KEY no configurada.")
-        return
-
-    api_url = f"{host_url}/api/process-batch-result"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}"
-    }
-    payload = {"batchId": batch_id}
-
-    try:
-        response = requests.post(api_url, json=payload, headers=headers, timeout=60)
-        response.raise_for_status()
-        print(f"  - ✅ Escritura de resultados para el lote {batch_id} iniciada exitosamente.")
-    except requests.exceptions.RequestException as e:
-        print(f"  - ❌ Error al iniciar la escritura de resultados para el lote {batch_id}: {e}")
-
-
 def check_imei_status(imei):
     """Verifica un solo IMEI usando la API externa."""
     if not imei or not str(imei).strip():
@@ -128,9 +104,6 @@ def main():
         batch_ref.update({'status': 'completed', 'completedAt': datetime.now(timezone.utc)})
         print(f"\n🎉 Lote {batch_id} marcado como completado.")
 
-        # Disparar la escritura de resultados en la hoja de cálculo
-        trigger_results_writing(batch_id)
-
     except Exception as e:
         print(f"❌ Error fatal durante la ejecución: {e}")
         if batch_ref:
@@ -142,4 +115,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
