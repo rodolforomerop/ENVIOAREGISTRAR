@@ -36,7 +36,7 @@ def check_imei_status(imei):
         full_result = response.json().get('resultado', 'Error: Respuesta inesperada')
         if "no está inscrito" in full_result.lower():
             return "Equipo NO inscrito"
-        elif "equipo se encuentra inscrito" in full_result.lower():
+        elif "Equipo inscrito correctamente. No se requiere ninguna acción." in full_result.lower():
             return "Equipo inscrito correctamente"
         else:
             return full_result
