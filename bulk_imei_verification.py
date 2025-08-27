@@ -33,14 +33,13 @@ def check_imei_status(imei):
         response = requests.post(url, json={"imei": str(imei).strip()}, timeout=20)
         response.raise_for_status()
         
-        # Procesar y acortar la respuesta
         full_result = response.json().get('resultado', 'Error: Respuesta inesperada')
         if "no está inscrito" in full_result.lower():
             return "Equipo NO inscrito"
         elif "equipo se encuentra inscrito" in full_result.lower():
             return "Equipo inscrito correctamente"
         else:
-            return full_result # Devolver el resultado completo si no es uno de los esperados
+            return full_result
 
     except requests.exceptions.RequestException as e:
         print(f"  - Error de red para IMEI {imei}: {e}")
@@ -48,6 +47,50 @@ def check_imei_status(imei):
     except Exception as e:
         print(f"  - Error inesperado para IMEI {imei}: {e}")
         return "Error en Script"
+
+def send_completion_notification(batch_id, company_id, item_count):
+    """Llama a la API de la app Next.js para enviar una notificación push."""
+    api_key = os.getenv('REGISTRATION_API_KEY')
+    host_url = os.getenv('HOST_URL', 'https://registroimeimultibanda.cl')
+    
+    if not api_key or not host_url:
+        print("⚠️ No se pueden enviar notificaciones: REGISTRATION_API_KEY o HOST_URL no están configuradas.")
+        return
+    
+    db = firestore.client()
+    company_ref = db.collection('companies').document(company_id)
+    company_doc = company_ref.get()
+    if not company_doc.exists:
+        print(f"⚠️ No se encontró la empresa con ID {company_id} para notificar.")
+        return
+        
+    owner_id = company_doc.to_dict().get('ownerId')
+    if not owner_id:
+        print(f"⚠️ La empresa {company_id} no tiene un propietario asignado.")
+        return
+
+    api_url = f"{host_url}/api/trigger-notification"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    payload = {
+        "userId": owner_id,
+        "payload": {
+            "title": "✅ Lote de Verificación Completado",
+            "body": f"El lote {batch_id} con {item_count} IMEI(s) ha sido verificado. ¡Revisa los resultados!",
+            "data": {
+                "url": f"/dashboard?batch_id={batch_id}"
+            }
+        }
+    }
+    
+    try:
+        response = requests.post(api_url, json=payload, headers=headers)
+        if response.status_code == 200:
+            print(f"  - ✅ Notificación enviada exitosamente al propietario {owner_id}.")
+        else:
+            print(f"  - ❌ Error al enviar notificación. Código: {response.status_code}, Respuesta: {response.text}")
+    except Exception as e:
+        print(f"  - ❌ Excepción al intentar enviar notificación: {e}")
+
 
 def main():
     """Función principal del script de verificación masiva desde Firestore."""
@@ -66,13 +109,20 @@ def main():
         print(f"📄 Procesando Lote de Verificación: {batch_id}")
 
         batch_ref = db.collection('imei_batches').document(batch_id)
+        batch_doc = batch_ref.get()
+        if not batch_doc.exists:
+             raise ValueError(f"No se encontró el lote con el ID: {batch_id}")
+        
+        batch_data = batch_doc.to_dict()
+        company_id = batch_data.get('companyId')
+        
         imeis_ref = batch_ref.collection('imeis')
-
-        # Buscar solo los IMEIs pendientes de este lote
         docs_to_process_stream = imeis_ref.where('status', '==', 'pending_verification').stream()
         docs_to_process = list(docs_to_process_stream)
         
+        total_items = batch_data.get('itemCount', len(docs_to_process))
         processed_count = 0
+        
         for doc in docs_to_process:
             imei_data = doc.to_dict()
             imei1 = imei_data.get('imei1')
@@ -81,22 +131,16 @@ def main():
             
             print(f"\n  - Verificando documento: {doc_id} (IMEI1: {imei1})")
             
-            update_data = {
-                'verifiedAt': datetime.now(timezone.utc),
-            }
+            update_data = {'verifiedAt': datetime.now(timezone.utc)}
             
-            # Procesar IMEI 1
             if imei1:
-                resultado1 = check_imei_status(imei1)
-                update_data['result1'] = resultado1
-                print(f"    -> Resultado IMEI 1: {resultado1}")
-                time.sleep(1) # Pausa entre verificaciones
+                update_data['result1'] = check_imei_status(imei1)
+                print(f"    -> Resultado IMEI 1: {update_data['result1']}")
+                time.sleep(1)
 
-            # Procesar IMEI 2 si existe
             if imei2:
-                resultado2 = check_imei_status(imei2)
-                update_data['result2'] = resultado2
-                print(f"    -> Resultado IMEI 2: {resultado2}")
+                update_data['result2'] = check_imei_status(imei2)
+                print(f"    -> Resultado IMEI 2: {update_data['result2']}")
                 time.sleep(1)
             
             update_data['status'] = 'verified'
@@ -109,9 +153,11 @@ def main():
         else:
             print(f"\n✅ Verificados {processed_count} registros.")
 
-        # Marcar el lote como completado
         batch_ref.update({'status': 'completed', 'completedAt': datetime.now(timezone.utc)})
         print(f"\n🎉 Lote {batch_id} marcado como completado.")
+        
+        if company_id:
+            send_completion_notification(batch_id, company_id, total_items)
 
     except Exception as e:
         print(f"❌ Error fatal durante la ejecución: {e}")
