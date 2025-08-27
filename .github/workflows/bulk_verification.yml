@@ -29,4 +29,6 @@ jobs:
         env:
           FIREBASE_CREDENTIALS_B64: ${{ secrets.FIREBASE_CREDENTIALS_B64 }}
           BATCH_ID: ${{ github.event.inputs.batchId }}
+          REGISTRATION_API_KEY: ${{ secrets.REGISTRATION_API_KEY }}
+          HOST_URL: https://registroimeimultibanda.cl
         run: python bulk_imei_verification.py
