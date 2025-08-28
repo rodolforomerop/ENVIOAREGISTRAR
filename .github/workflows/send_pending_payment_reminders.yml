@@ -1,0 +1,32 @@
+name: Enviar Recordatorios de Pago Pendiente
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Se ejecuta cada hora, en el minuto 5.
+    - cron: '5 * * * *'
+
+jobs:
+  enviar-recordatorios:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Pending Payment Follow-up Script
+        env:
+          FIREBASE_CREDENTIALS_B64: ${{ secrets.FIREBASE_CREDENTIALS_B64 }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          MAIN_COMPANY_ID: ${{ secrets.MAIN_COMPANY_ID }}
+        run: python pending_payment_followup.py
