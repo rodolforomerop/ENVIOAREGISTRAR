@@ -31,19 +31,64 @@ def send_resend_email(api_key, to_email, user_name, order_number, device, imei, 
 
     url = "https://api.resend.com/emails"
     
-    # We can reuse the same registration-pending template by passing the right props
+    # Define the HTML content for the email
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body {{ margin: 0; background-color: #f4f4f7; font-family: sans-serif; }}
+            .container {{ background-color: #ffffff; border: 1px solid #e0e0e0; border-radius: 8px; margin: 32px auto; padding: 32px; max-width: 520px; }}
+            .logo {{ text-align: center; }}
+            .text {{ font-size: 16px; color: #333333; line-height: 1.6; }}
+            .button-section {{ text-align: center; margin: 24px 0; }}
+            .button {{ background-color: #009959; color: #ffffff; font-weight: 600; border-radius: 6px; padding: 12px 24px; text-decoration: none; }}
+            .footer-text {{ font-size: 12px; color: #888888; text-align: center; }}
+            .order-summary {{ background-color: #f9f9f9; border: 1px solid #eeeeee; border-radius: 6px; padding: 16px; margin: 24px 0; }}
+            .order-summary-title {{ font-size: 16px; font-weight: bold; margin-bottom: 12px; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="logo">
+                <img src="https://registroimeimultibanda.cl/Logo%20Registro%20IMEI%20Multibanda%20Chile.webp" width="180" alt="Registro IMEI Multibanda Chile" />
+            </div>
+            <h1 style="font-size: 20px; font-weight: bold; margin-top: 32px;">¡Hola, {user_name}!</h1>
+            <p class="text">
+                Notamos que tu orden de registro <strong>#{order_number}</strong> aún está pendiente de pago. ¡No te preocupes! Aún estás a tiempo de completarla.
+            </p>
+            <div class="order-summary">
+                <p class="order-summary-title">Resumen de tu Orden:</p>
+                <p class="text" style="font-size: 14px; margin: 4px 0;"><strong>Dispositivo:</strong> {device}</p>
+                <p class="text" style="font-size: 14px; margin: 4px 0;"><strong>IMEI:</strong> {imei}</p>
+            </div>
+            <p class="text">
+                Completa el pago para que podamos iniciar el proceso y tener tu equipo listo para usar en todas las redes de Chile.
+            </p>
+            <div class="button-section">
+                <a href="https://registroimeimultibanda.cl/dashboard?order_number={order_number}" class="button">
+                    Completar Mi Pago Ahora
+                </a>
+            </div>
+            <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 24px 0;" />
+            <p class="footer-text">
+                Si ya realizaste el pago, por favor ignora este mensaje. Si tienes alguna duda, contacta a nuestro equipo de soporte.
+            </p>
+            <p class="footer-text">
+                © {datetime.now().year} Registro IMEI Multibanda. Todos los derechos reservados.
+            </p>
+        </div>
+    </body>
+    </html>
+    """
+
     payload = {
         "from": "Registro IMEI Multibanda <registro@registroimeimultibanda.cl>",
         "to": [to_email],
         "subject": f"Acción requerida para tu orden #{order_number}",
-        "react_template": "registration-pending",
-        "react_props": {
-            "name": user_name,
-            "orderNumber": order_number,
-            "device": device,
-            "imei": imei,
-            "paymentMethod": payment_method
-        }
+        "html": html_content
     }
     
     headers = {
