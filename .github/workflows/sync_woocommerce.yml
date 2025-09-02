@@ -16,6 +16,6 @@ jobs:
           REGISTRATION_API_KEY: ${{ secrets.REGISTRATION_API_KEY }}
           HOST_URL: https://registroimeimultibanda.cl
         run: |
-          curl -X POST "$HOST_URL/api/sync-woocommerce" \
+          curl -X POST "$HOST_URL/api/sync-woocommerce/" \
             -H "Authorization: Bearer $REGISTRATION_API_KEY" \
             -H "Content-Type: application/json"
