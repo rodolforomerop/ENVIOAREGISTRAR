@@ -30,6 +30,6 @@ jobs:
 
       - name: Run IMEI Check Script
         env:
-          GSPREAD_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+          GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
           GSPREAD_SHEET_NAME: ${{ secrets.GSPREAD_SHEET_NAME }}
         run: python script.py
