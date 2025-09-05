@@ -1,10 +1,3 @@
-Claro, aquí tienes el código completo y mejorado listo para copiar y pegar.
-
-Este script incluye la lógica de depuración detallada en la función de conexión, lo que te ayudará a identificar rápidamente cualquier problema de configuración si vuelve a ocurrir.
-
-script.py
-Python
-
 # script.py - VERSIÓN PARA GITHUB ACTIONS (CON DEPURACIÓN MEJORADA)
 import gspread
 import time
