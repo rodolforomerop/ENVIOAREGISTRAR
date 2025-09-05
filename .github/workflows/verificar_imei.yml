@@ -1,4 +1,4 @@
-name: Verificador Automatico de IMEI
+name: Verificador Automatico de IMEI (GSHEET)
 
 on:
   # Para que puedas seguir ejecutándolo manualmente
