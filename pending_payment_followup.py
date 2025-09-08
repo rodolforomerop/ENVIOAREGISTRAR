@@ -23,149 +23,203 @@ def initialize_firebase():
             
     return firestore.client()
 
-def send_resend_email(api_key, to_email, user_name, order_number, device, imei, payment_method):
-    """Sends the pending payment reminder email using the Resend API."""
+def check_external_status(imei):
+    """Verifica si el IMEI ya está inscrito a través de la API externa."""
+    if not imei:
+        return False
+    url = "https://verificador-imei.onrender.com/verificar"
+    try:
+        response = requests.post(url, json={"imei": str(imei).strip()}, timeout=20)
+        if response.status_code == 200:
+            full_result = response.json().get('resultado', '')
+            return "equipo se encuentra inscrito" in full_result.lower()
+    except requests.exceptions.RequestException:
+        pass # Ignora errores de conexión para no detener el flujo
+    return False
+
+def generate_discounted_link(order_number):
+    """Llama a la API interna para generar un enlace de pago con descuento."""
+    api_key = os.getenv('REGISTRATION_API_KEY')
+    host_url = os.getenv('HOST_URL')
+    if not api_key or not host_url:
+        print(f"  - ⚠️ No se puede generar enlace con descuento para {order_number}: API Key o Host URL no configuradas.")
+        return None
+
+    api_url = f"{host_url}/api/create-discounted-payment-link"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = {"orderNumber": order_number}
+
+    try:
+        response = requests.post(api_url, json=payload, headers=headers)
+        if response.status_code == 200:
+            return response.json().get('paymentUrl')
+        else:
+            print(f"  - ❌ Error al generar enlace con descuento para {order_number}. Código: {response.status_code}, Respuesta: {response.text}")
+            return None
+    except Exception as e:
+        print(f"  - ❌ Excepción al generar enlace con descuento para {order_number}: {e}")
+        return None
+
+
+def send_resend_email(api_key, to_email, user_name, order_number, device, imei, level, discount_link=None):
+    """Envía el correo de seguimiento usando la API de Resend."""
     if not api_key:
         print(" - RESEND_API_KEY not found. Cannot send email.")
         return False
 
     url = "https://api.resend.com/emails"
     
-    # Define the HTML content for the email
-    html_content = f"""
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <style>
-            body {{ margin: 0; background-color: #f4f4f7; font-family: sans-serif; }}
-            .container {{ background-color: #ffffff; border: 1px solid #e0e0e0; border-radius: 8px; margin: 32px auto; padding: 32px; max-width: 520px; }}
-            .logo {{ text-align: center; }}
-            .text {{ font-size: 16px; color: #333333; line-height: 1.6; }}
-            .button-section {{ text-align: center; margin: 24px 0; }}
-            .button {{ background-color: #009959; color: #ffffff; font-weight: 600; border-radius: 6px; padding: 12px 24px; text-decoration: none; }}
-            .footer-text {{ font-size: 12px; color: #888888; text-align: center; }}
-            .order-summary {{ background-color: #f9f9f9; border: 1px solid #eeeeee; border-radius: 6px; padding: 16px; margin: 24px 0; }}
-            .order-summary-title {{ font-size: 16px; font-weight: bold; margin-bottom: 12px; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="logo">
-                <img src="https://registroimeimultibanda.cl/Logo%20Registro%20IMEI%20Multibanda%20Chile.webp" width="180" alt="Registro IMEI Multibanda Chile" />
-            </div>
-            <h1 style="font-size: 20px; font-weight: bold; margin-top: 32px;">¡Hola, {user_name}!</h1>
-            <p class="text">
-                Notamos que tu orden de registro <strong>#{order_number}</strong> aún está pendiente de pago. ¡No te preocupes! Aún estás a tiempo de completarla.
-            </p>
-            <div class="order-summary">
-                <p class="order-summary-title">Resumen de tu Orden:</p>
-                <p class="text" style="font-size: 14px; margin: 4px 0;"><strong>Dispositivo:</strong> {device}</p>
-                <p class="text" style="font-size: 14px; margin: 4px 0;"><strong>IMEI:</strong> {imei}</p>
-            </div>
-            <p class="text">
-                Completa el pago para que podamos iniciar el proceso y tener tu equipo listo para usar en todas las redes de Chile.
-            </p>
-            <div class="button-section">
-                <a href="https://registroimeimultibanda.cl/dashboard?order_number={order_number}" class="button">
-                    Completar Mi Pago Ahora
-                </a>
-            </div>
-            <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 24px 0;" />
-            <p class="footer-text">
-                Si ya realizaste el pago, por favor ignora este mensaje. Si tienes alguna duda, contacta a nuestro equipo de soporte.
-            </p>
-            <p class="footer-text">
-                © {datetime.now().year} Registro IMEI Multibanda. Todos los derechos reservados.
-            </p>
-        </div>
-    </body>
-    </html>
+    subjects = {
+        1: f"Acción requerida para tu orden #{order_number}",
+        2: f"Recordatorio: Tu equipo {device} aún necesita registro",
+        3: f"Última oportunidad: ¡Registra tu IMEI con un 50% de descuento!",
+    }
+    
+    html_contents = {
+        1: f"""
+            <p>Notamos que tu orden de registro <strong>#{order_number}</strong> para el equipo {device} (IMEI: {imei}) aún está pendiente de pago. ¡No te preocupes! Aún estás a tiempo de completarla.</p>
+            <p>Completa el pago para que podamos iniciar el proceso y tener tu equipo listo para usar en todas las redes de Chile.</p>
+        """,
+        2: f"""
+            <p>Solo un recordatorio amigable de que tu orden <strong>#{order_number}</strong> para registrar el equipo {device} (IMEI: {imei}) sigue pendiente. </p>
+            <p>No dejes que tu equipo quede sin servicio. El proceso es 100% online y garantizado.</p>
+        """,
+        3: f"""
+            <p>Vimos que aún no has completado el registro para tu equipo {device} (IMEI: {imei}). ¡No queremos que te quedes sin servicio!</p>
+            <p>Como última oportunidad, te ofrecemos un <strong>descuento especial del 50%</strong> para que completes tu registro ahora. Esta oferta es válida solo a través del siguiente botón.</p>
+        """
+    }
+
+    button_link = discount_link if level == 3 and discount_link else f"https://registroimeimultibanda.cl/dashboard?order_number={order_number}"
+
+    html_body = f"""
+    <!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><style>body{{font-family:sans-serif;}} .container{{max-width:580px; margin:auto; padding:20px; border:1px solid #ddd; border-radius:8px;}} .button{{background-color:#009959; color:white; padding:12px 24px; text-decoration:none; border-radius:5px; font-weight:bold;}}</style></head>
+    <body><div class="container">
+        <div style="text-align:center;"><img src="https://registroimeimultibanda.cl/Logo%20Registro%20IMEI%20Multibanda%20Chile.webp" width="180" alt="Logo"/></div>
+        <h1 style="font-size:20px;">¡Hola, {user_name}!</h1>
+        {html_contents[level]}
+        <div style="text-align:center; margin:30px 0;"><a href="{button_link}" class="button">Completar Mi Pago Ahora</a></div>
+        <hr/><p style="font-size:12px; color:#888; text-align:center;">Si ya realizaste el pago o tienes dudas, contacta a soporte.</p>
+    </div></body></html>
     """
 
     payload = {
         "from": "Registro IMEI Multibanda <registro@registroimeimultibanda.cl>",
         "to": [to_email],
-        "subject": f"Acción requerida para tu orden #{order_number}",
-        "html": html_content
+        "subject": subjects[level],
+        "html": html_body
     }
     
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     
     try:
         response = requests.post(url, json=payload, headers=headers)
         response.raise_for_status()
-        print(f"  - Reminder email sent successfully to {to_email} for order {order_number}.")
+        print(f"  - Correo de seguimiento (Nivel {level}) enviado a {to_email} para la orden {order_number}.")
         return True
     except requests.exceptions.RequestException as e:
-        print(f"  - Error sending email to {to_email} for order {order_number}: {e}")
-        if e.response is not None:
-            print(f"  - API Response: {e.response.text}")
+        print(f"  - Error al enviar correo (Nivel {level}) a {to_email}: {e}")
         return False
 
 def main():
-    """Main function of the script."""
-    print("🚀 Starting pending payment reminder script...")
+    """Función principal del script."""
+    print("🚀 Iniciando script de seguimiento de pagos pendientes...")
     
     try:
         db = initialize_firebase()
         resend_api_key = os.getenv('RESEND_API_KEY')
         main_company_id = os.getenv('MAIN_COMPANY_ID')
     except Exception as e:
-        print(f"Failed to initialize. Aborting. Error: {e}")
+        print(f"Error fatal de inicialización: {e}")
         return
         
     if not main_company_id:
-        print("⚠️ MAIN_COMPANY_ID environment variable not set. Cannot filter for direct sales. Aborting.")
+        print("⚠️ MAIN_COMPANY_ID no configurado. Abortando.")
         return
 
-    now = datetime.now(timezone.utc)
-    one_hour_ago = now - timedelta(hours=1)
-    twenty_four_hours_ago = now - timedelta(hours=24)
-
+    now_utc = datetime.now(timezone.utc)
+    
     registros_ref = db.collection('registros')
     
-    # Query for orders that are pending payment, older than 1 hour, newer than 24 hours,
-    # belong to the main company, and haven't had a follow-up sent.
     query = registros_ref.where('status', '==', 'Pendiente de Pago') \
                          .where('companyId', '==', main_company_id) \
-                         .where('followUpSent', '==', False) \
-                         .where('createdAt', '<=', one_hour_ago) \
-                         .where('createdAt', '>=', twenty_four_hours_ago)
+                         .where('followUpLevel', '<', 3)
     
     docs_to_process = list(query.stream())
 
     if not docs_to_process:
-        print("✅ No pending payment orders found matching the criteria. Finishing.")
+        print("✅ No se encontraron órdenes pendientes que requieran seguimiento. Finalizando.")
         return
 
-    print(f"Found {len(docs_to_process)} orders to process.")
+    print(f"Se encontraron {len(docs_to_process)} órdenes candidatas para seguimiento.")
 
     for doc in docs_to_process:
         data = doc.to_dict()
         doc_id = doc.id
         
-        print(f"\n- Processing order: {doc_id} for {data.get('customerEmail')}")
+        print(f"\n- Procesando orden: {doc_id} para {data.get('customerEmail')}")
 
-        email_sent = send_resend_email(
-            api_key=resend_api_key,
-            to_email=data.get('customerEmail'),
-            user_name=data.get('customerName'),
-            order_number=doc_id,
-            device=f"{data.get('brand', '')} {data.get('model', '')}",
-            imei=data.get('imei1'),
-            payment_method=data.get('paymentMethod')
-        )
+        # --- Comprobaciones Inteligentes ---
+        imei_a_verificar = data.get('imei1')
+        email_cliente = data.get('customerEmail')
+        
+        # 1. ¿El cliente ya pagó otra orden con el mismo IMEI?
+        paid_orders_query = registros_ref.where('imei1', '==', imei_a_verificar) \
+                                           .where('customerEmail', '==', email_cliente) \
+                                           .where('status', '!=', 'Pendiente de Pago') \
+                                           .limit(1).stream()
+        if any(paid_orders_query):
+            print(f"  - ✅ El cliente ya pagó otra orden para este IMEI. Cancelando esta orden pendiente.")
+            doc.reference.update({'status': 'Cancelado', 'followUpLevel': 4}) # Nivel 4 para indicar cancelado por sistema
+            continue
+            
+        # 2. ¿El IMEI ya fue registrado por otro medio?
+        if check_external_status(imei_a_verificar):
+            print(f"  - ✅ El IMEI {imei_a_verificar} ya se encuentra registrado. Cancelando esta orden.")
+            doc.reference.update({'status': 'Cancelado', 'followUpLevel': 4})
+            continue
 
-        if email_sent:
-            doc.reference.update({'followUpSent': True})
-            print(f"  - Marked order {doc_id} as followUpSent: True.")
+        # --- Lógica de Tiempo y Niveles ---
+        created_at = data.get('createdAt').replace(tzinfo=timezone.utc)
+        hours_since_creation = (now_utc - created_at).total_seconds() / 3600
+        current_level = data.get('followUpLevel', 0)
 
-    print("\n🎉 Pending payment reminder process completed.")
+        should_send = False
+        next_level = 0
+
+        if current_level == 0 and hours_since_creation >= 1:
+            should_send, next_level = True, 1
+        elif current_level == 1 and hours_since_creation >= 24:
+            should_send, next_level = True, 2
+        elif current_level == 2 and hours_since_creation >= 72: # 3 días
+            should_send, next_level = True, 3
+        
+        if should_send:
+            print(f"  - 📧 La orden califica para el correo de Nivel {next_level}.")
+            
+            discount_link = None
+            if next_level == 3:
+                discount_link = generate_discounted_link(doc_id)
+            
+            email_sent = send_resend_email(
+                api_key=resend_api_key,
+                to_email=email_cliente,
+                user_name=data.get('customerName'),
+                order_number=doc_id,
+                device=f"{data.get('brand', '')} {data.get('model', '')}",
+                imei=imei_a_verificar,
+                level=next_level,
+                discount_link=discount_link
+            )
+
+            if email_sent:
+                doc.reference.update({'followUpLevel': next_level})
+                print(f"  - ✨ Nivel de seguimiento actualizado a {next_level} para la orden {doc_id}.")
+        else:
+            print(f"  - ⏳ Aún no es tiempo para el siguiente recordatorio (Nivel actual: {current_level}, Horas: {hours_since_creation:.2f}).")
+
+
+    print("\n🎉 Proceso de seguimiento de pagos pendientes completado.")
 
 if __name__ == "__main__":
     main()
