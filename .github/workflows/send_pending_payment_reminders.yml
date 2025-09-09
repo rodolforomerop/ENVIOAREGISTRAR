@@ -27,8 +27,7 @@ jobs:
       - name: Run Pending Payment Follow-up Script
         env:
           FIREBASE_CREDENTIALS_B64: ${{ secrets.FIREBASE_CREDENTIALS_B64 }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          MAIN_COMPANY_ID: ${{ secrets.MAIN_COMPANY_ID }}
-          HOST_URL: https://registroimeimultibanda.cl
           REGISTRATION_API_KEY: ${{ secrets.REGISTRATION_API_KEY }}
+          HOST_URL: https://registroimeimultibanda.cl
+          MAIN_COMPANY_ID: ${{ secrets.MAIN_COMPANY_ID }}
         run: python pending_payment_followup.py
