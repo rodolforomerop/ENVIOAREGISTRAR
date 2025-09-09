@@ -60,66 +60,41 @@ def generate_discounted_link(order_number):
         print(f"  - ❌ Excepción al generar enlace con descuento para {order_number}: {e}")
         return None
 
-
-def send_resend_email(api_key, to_email, user_name, order_number, device, imei, level, discount_link=None):
-    """Envía el correo de seguimiento usando la API de Resend."""
-    if not api_key:
-        print(" - RESEND_API_KEY not found. Cannot send email.")
+def trigger_follow_up_email(to_email, user_name, order_number, device, imei, level, discount_link=None):
+    """Triggers the follow-up email by calling the app's API endpoint."""
+    api_key = os.getenv('REGISTRATION_API_KEY')
+    host_url = os.getenv('HOST_URL')
+    
+    if not api_key or not host_url:
+        print(" - API_KEY or HOST_URL not found. Cannot send email.")
         return False
 
-    url = "https://api.resend.com/emails"
+    api_url = f"{host_url}/api/send-followup-email"
     
-    subjects = {
-        1: f"Acción requerida para tu orden #{order_number}",
-        2: f"Recordatorio: Tu equipo {device} aún necesita registro",
-        3: f"Última oportunidad: ¡Registra tu IMEI con un 50% de descuento!",
-    }
-    
-    html_contents = {
-        1: f"""
-            <p>Notamos que tu orden de registro <strong>#{order_number}</strong> para el equipo {device} (IMEI: {imei}) aún está pendiente de pago. ¡No te preocupes! Aún estás a tiempo de completarla.</p>
-            <p>Completa el pago para que podamos iniciar el proceso y tener tu equipo listo para usar en todas las redes de Chile.</p>
-        """,
-        2: f"""
-            <p>Solo un recordatorio amigable de que tu orden <strong>#{order_number}</strong> para registrar el equipo {device} (IMEI: {imei}) sigue pendiente. </p>
-            <p>No dejes que tu equipo quede sin servicio. El proceso es 100% online y garantizado.</p>
-        """,
-        3: f"""
-            <p>Vimos que aún no has completado el registro para tu equipo {device} (IMEI: {imei}). ¡No queremos que te quedes sin servicio!</p>
-            <p>Como última oportunidad, te ofrecemos un <strong>descuento especial del 50%</strong> para que completes tu registro ahora. Esta oferta es válida solo a través del siguiente botón.</p>
-        """
-    }
-
-    button_link = discount_link if level == 3 and discount_link else f"https://registroimeimultibanda.cl/dashboard?order_number={order_number}"
-
-    html_body = f"""
-    <!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><style>body{{font-family:sans-serif;}} .container{{max-width:580px; margin:auto; padding:20px; border:1px solid #ddd; border-radius:8px;}} .button{{background-color:#009959; color:white; padding:12px 24px; text-decoration:none; border-radius:5px; font-weight:bold;}}</style></head>
-    <body><div class="container">
-        <div style="text-align:center;"><img src="https://registroimeimultibanda.cl/Logo%20Registro%20IMEI%20Multibanda%20Chile.webp" width="180" alt="Logo"/></div>
-        <h1 style="font-size:20px;">¡Hola, {user_name}!</h1>
-        {html_contents[level]}
-        <div style="text-align:center; margin:30px 0;"><a href="{button_link}" class="button">Completar Mi Pago Ahora</a></div>
-        <hr/><p style="font-size:12px; color:#888; text-align:center;">Si ya realizaste el pago o tienes dudas, contacta a soporte.</p>
-    </div></body></html>
-    """
-
     payload = {
-        "from": "Registro IMEI Multibanda <registro@registroimeimultibanda.cl>",
-        "to": [to_email],
-        "subject": subjects[level],
-        "html": html_body
+        "to": to_email,
+        "data": {
+            "name": user_name,
+            "orderNumber": order_number,
+            "device": device,
+            "imei": imei,
+            "paymentMethod": "MercadoPago", # Default a un método que no sea Manual
+            "discount": level == 3,
+            "discountLink": discount_link
+        }
     }
     
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     
     try:
-        response = requests.post(url, json=payload, headers=headers)
+        response = requests.post(api_url, json=payload, headers=headers)
         response.raise_for_status()
-        print(f"  - Correo de seguimiento (Nivel {level}) enviado a {to_email} para la orden {order_number}.")
+        print(f"  - Correo de seguimiento (Nivel {level}) solicitado para {to_email} para la orden {order_number}.")
         return True
     except requests.exceptions.RequestException as e:
-        print(f"  - Error al enviar correo (Nivel {level}) a {to_email}: {e}")
+        print(f"  - Error al solicitar correo (Nivel {level}) a {to_email}: {e}")
         return False
+
 
 def main():
     """Función principal del script."""
@@ -127,7 +102,6 @@ def main():
     
     try:
         db = initialize_firebase()
-        resend_api_key = os.getenv('RESEND_API_KEY')
         main_company_id = os.getenv('MAIN_COMPANY_ID')
     except Exception as e:
         print(f"Error fatal de inicialización: {e}")
@@ -201,8 +175,7 @@ def main():
             if next_level == 3:
                 discount_link = generate_discounted_link(doc_id)
             
-            email_sent = send_resend_email(
-                api_key=resend_api_key,
+            email_sent = trigger_follow_up_email(
                 to_email=email_cliente,
                 user_name=data.get('customerName'),
                 order_number=doc_id,
