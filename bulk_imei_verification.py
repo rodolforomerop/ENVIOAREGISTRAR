@@ -16,22 +16,21 @@ WOM_API  = "https://sucursalmiwom.wom.cl/listablanca/api/whitelist/consultaImeiI
 
 REQ_TIMEOUT = 20
 RETRIES_PER_IMEI = 2
-SLEEP_BETWEEN_IMEIS = 1.0   # segundos
-SLEEP_BETWEEN_RETRIES = 0.6 # segundos
+SLEEP_BETWEEN_IMEIS = 1.0   # segundos entre IMEIs
+SLEEP_BETWEEN_RETRIES = 0.6 # segundos entre reintentos
 
-# Campos/colecciones de Firestore
+# Firestore
 COL_BATCHES = "imei_batches"
 SUBCOL_IMEIS = "imeis"
 # ============================================
 
 
 def initialize_firebase():
-    """Inicializa la app de Firebase Admin si no está ya inicializada."""
+    """Inicializa Firebase Admin con credenciales base64 del env."""
     if not firebase_admin._apps:
         b64_creds = os.getenv('FIREBASE_CREDENTIALS_B64')
         if not b64_creds:
-            raise ValueError("La variable de entorno FIREBASE_CREDENTIALS_B64 no está configurada.")
-
+            raise ValueError("FIREBASE_CREDENTIALS_B64 no está configurada.")
         try:
             decoded = base64.b64decode(b64_creds).decode('utf-8')
             cred_dict = json.loads(decoded)
@@ -45,72 +44,92 @@ def initialize_firebase():
 
 def wom_query(imei: str) -> dict:
     """
-    Consulta directa al endpoint oficial de WOM.
-    Devuelve dict con: ok(bool), estado(str|None), is5g(bool|None), mensaje(str|None), raw(str)
+    Consulta directa al endpoint oficial de WOM usando sesión y backoff.
+    Retorna:
+      { ok:bool, estado:str|None, is5g:bool|None, mensaje:str|None,
+        raw:str, http:int|None, error:str|None }
+    ok=True sólo si hay HTTP 200 y un ESTADO presente.
     """
     if not imei or not str(imei).strip():
-        return {"ok": False, "estado": None, "is5g": None, "mensaje": "IMEI vacío", "raw": ""}
+        return {"ok": False, "estado": None, "is5g": None, "mensaje": "IMEI vacío", "raw": "", "http": None, "error": "imei_vacio"}
 
-    payload = {"linea": "", "imei": str(imei).strip(), "token": ""}  # hoy el token vacío funciona
-    headers = {
-        "Content-Type": "application/json",
+    imei_str = str(imei).strip()
+    payload = {"linea": "", "imei": imei_str, "token": ""}  # hoy token vacío funciona
+
+    base_headers = {
         "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Content-Type": "application/json",
         "X-Requested-With": "XMLHttpRequest",
         "Origin": "https://sucursalmiwom.wom.cl",
         "Referer": WOM_PAGE,
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Cache-Control": "no-cache",
     }
 
-    try:
-        r = requests.post(WOM_API, json=payload, headers=headers, timeout=REQ_TIMEOUT)
-        raw = r.text
-    except requests.RequestException as e:
-        return {"ok": False, "estado": None, "is5g": None, "mensaje": f"Error de red: {type(e).__name__} {e}", "raw": ""}
-
+    s = requests.Session()
     estado = None
     is5g = None
     msg = None
-    try:
-        data = r.json()
-        arr = (data or {}).get("Resultado") or []
-        if arr:
-            it = arr[0]
-            estado = it.get("ESTADO")
-            is5g = it.get("is5g")
-            msg = html.unescape((it.get("mensajeSubtel") or "")).replace("<br>", "\n")
-    except ValueError:
-        pass
+    raw = ""
+    http = None
+    last_err = None
 
-    ok = (r.status_code == 200 and estado is not None)
-    return {"ok": ok, "estado": estado, "is5g": is5g, "mensaje": msg, "raw": raw}
+    for attempt in range(RETRIES_PER_IMEI + 1):
+        try:
+            # 1) GET previo para cookies/sesión
+            s.get(WOM_PAGE, headers={"User-Agent": base_headers["User-Agent"]}, timeout=REQ_TIMEOUT)
+
+            # 2) POST real
+            r = s.post(WOM_API, json=payload, headers=base_headers, timeout=REQ_TIMEOUT)
+            http = r.status_code
+            raw = r.text
+
+            data = None
+            try:
+                data = r.json()
+            except ValueError:
+                data = None
+
+            if http == 200 and isinstance(data, dict):
+                arr = (data or {}).get("Resultado") or []
+                if arr:
+                    it = arr[0]
+                    estado = (it.get("ESTADO") or "").strip() or None
+                    is5g = it.get("is5g")
+                    msg = html.unescape((it.get("mensajeSubtel") or "")).replace("<br>", "\n")
+                    # Sólo ok=True si hay ESTADO
+                    return {"ok": bool(estado), "estado": estado, "is5g": is5g, "mensaje": msg, "raw": raw, "http": http, "error": None}
+
+            last_err = f"http={http}, sin ESTADO"
+        except requests.RequestException as e:
+            last_err = f"red:{type(e).__name__} {e}"
+
+        # backoff + jitter leve
+        time.sleep(SLEEP_BETWEEN_RETRIES + 0.2 * attempt)
+
+    return {"ok": False, "estado": None, "is5g": None, "mensaje": None, "raw": raw, "http": http, "error": last_err}
 
 
 def check_imei_status(imei: str) -> str:
     """
-    Verifica un IMEI con WOM (con reintentos) y devuelve un resumen corto para guardar.
-    - NOEN -> "Equipo NO inscrito"
-    - cualquier otro estado -> "Equipo inscrito (ESTADO=..., 5G=...)"
-    - si falla, devuelve un mensaje de error corto.
+    Devuelve SOLO:
+      - 'Equipo Inscrito'       (si ESTADO != 'NOEN')
+      - 'Equipo NO inscrito'    (si ESTADO == 'NOEN')
+      - 'Sin resultado'         (si no se obtuvo ESTADO real tras reintentos)
     """
-    last_raw = ""
-    for attempt in range(RETRIES_PER_IMEI + 1):
+    for _ in range(RETRIES_PER_IMEI + 1):
         res = wom_query(imei)
-        last_raw = res.get("raw") or ""
-        if res["ok"] and res["estado"]:
-            if res["estado"] == "NOEN":
-                return "Equipo NO inscrito"
-            return f"Equipo inscrito (ESTADO={res['estado']}, 5G={res['is5g']})"
+        estado = (res.get("estado") or "").strip().upper()
+        if res.get("ok") and estado:
+            return "Equipo NO inscrito" if estado == "NOEN" else "Equipo Inscrito"
         time.sleep(SLEEP_BETWEEN_RETRIES)
 
-    # Si no hubo estado válido
-    short = (last_raw[:180] + "…") if last_raw and len(last_raw) > 180 else (last_raw or "sin respuesta")
-    return f"Error: WOM sin estado válido ({short})"
+    return "Sin resultado"
 
 
 def send_completion_notification(batch_id: str, company_id: str, item_count: int):
     """
-    Llama a la API Next.js para notificar que terminó el lote.
+    Notifica a tu API Next.js que terminó el lote.
     """
     api_key = os.getenv('REGISTRATION_API_KEY')
     host_url = os.getenv('HOST_URL', 'https://registroimeimultibanda.cl')
@@ -163,7 +182,6 @@ def main():
 
     db = initialize_firebase()
 
-    # Lee el documento del lote
     batch_ref = db.collection(COL_BATCHES).document(batch_id)
     batch_doc = batch_ref.get()
     if not batch_doc.exists:
@@ -172,7 +190,7 @@ def main():
     batch_data = batch_doc.to_dict() or {}
     company_id = batch_data.get('companyId')
 
-    # Lee items 'pending_verification' con FieldFilter (sin warnings)
+    # Leer items pending_verification sin warnings
     imeis_ref = batch_ref.collection(SUBCOL_IMEIS)
     q = imeis_ref.where(filter=FieldFilter('status', '==', 'pending_verification'))
     docs_to_process = list(q.stream())
@@ -180,7 +198,6 @@ def main():
 
     if not docs_to_process:
         print("⚠️ No hay IMEIs pendientes en este lote.")
-        # Igual marcamos el lote como completado si itemCount == 0
         if total_items == 0:
             batch_ref.update({'status': 'completed', 'completedAt': datetime.now(timezone.utc)})
         return
@@ -197,26 +214,32 @@ def main():
         print(f"\n  - Verificando documento: {doc_id} | IMEI1={imei1} IMEI2={imei2}")
 
         update_data = {'verifiedAt': datetime.now(timezone.utc)}
+
         # IMEI 1
-        if imei1:
-            res1 = check_imei_status(imei1)
-            update_data['result1'] = res1
-            print(f"    -> Resultado IMEI 1: {res1}")
-            time.sleep(SLEEP_BETWEEN_IMEIS)
-        else:
-            update_data['result1'] = "Vacío"
+        update_data['result1'] = check_imei_status(imei1) if imei1 else "Sin resultado"
+        print(f"    -> Resultado IMEI 1: {update_data['result1']}")
+        time.sleep(SLEEP_BETWEEN_IMEIS)
 
         # IMEI 2 (opcional)
         if imei2:
-            res2 = check_imei_status(imei2)
-            update_data['result2'] = res2
-            print(f"    -> Resultado IMEI 2: {res2}")
+            update_data['result2'] = check_imei_status(imei2)
+            print(f"    -> Resultado IMEI 2: {update_data['result2']}")
             time.sleep(SLEEP_BETWEEN_IMEIS)
+
+        # Consolidado final
+        r1 = (update_data.get('result1') or "").lower()
+        r2 = (update_data.get('result2') or "").lower()
+        if "equipo inscrito" in r1 or "equipo inscrito" in r2:
+            update_data['result_final'] = "Equipo Inscrito"
+        elif ("equipo no inscrito" in r1) and (("equipo no inscrito" in r2) or not r2):
+            update_data['result_final'] = "Equipo NO inscrito"
+        else:
+            update_data['result_final'] = "Sin resultado"
 
         update_data['status'] = 'verified'
         try:
             imeis_ref.document(doc_id).update(update_data)
-            print(f"    -> Documento {doc_id} actualizado a 'verified'.")
+            print(f"    -> Documento {doc_id} actualizado a 'verified'. (Final: {update_data['result_final']})")
         except Exception as e:
             print(f"    -> ❌ Error actualizando {doc_id}: {e}")
 
@@ -238,7 +261,7 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         print(f"❌ Error fatal: {e}")
-        # intenta marcar el lote como fallido si es posible
+        # marca el lote como fallido si es posible
         try:
             db = firestore.client()
             batch_id = os.getenv('BATCH_ID')
@@ -248,6 +271,6 @@ if __name__ == "__main__":
                     'error': str(e),
                     'failedAt': datetime.now(timezone.utc)
                 })
-        except Exception as _:
+        except Exception:
             pass
         raise
