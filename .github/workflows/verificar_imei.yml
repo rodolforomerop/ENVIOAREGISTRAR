@@ -1,27 +1,36 @@
 name: Verificador Automatico de IMEI (GSHEET)
 
 on:
-  # Para que puedas seguir ejecutándolo manualmente
-  workflow_dispatch:
-  
-  # Para ejecutarlo en el horario programado
+  workflow_dispatch: {}
   schedule:
-    # Se ejecuta cada 15 minutos, todos los días.
-    - cron: '*/15 * * * *'
+    - cron: "*/15 * * * *"  # OJO: en UTC
 
+permissions:
+  contents: read
+
+concurrency:
+  group: gsheet-imei-check
+  cancel-in-progress: true
 
 jobs:
   verificar:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
+      GSPREAD_SHEET_NAME: ${{ secrets.GSPREAD_SHEET_NAME }}
+      PYTHONUNBUFFERED: "1"
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.11"
+          cache: "pip"
 
       - name: Install dependencies
         run: |
@@ -29,7 +38,4 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run IMEI Check Script
-        env:
-          GSPREAD_CREDENTIALS: ${{ secrets.GSPREAD_CREDENTIALS }}
-          GSPREAD_SHEET_NAME: ${{ secrets.GSPREAD_SHEET_NAME }}
         run: python script.py
