@@ -4,31 +4,45 @@ on:
   workflow_dispatch:
     inputs:
       batchId:
-        description: 'ID del Lote de Verificación en Firestore'
+        description: "ID del Lote de Verificación en Firestore"
         required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bulk-imei-${{ github.event.inputs.batchId }}
+  cancel-in-progress: true
 
 jobs:
   verificar-lote:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      FIREBASE_CREDENTIALS_B64: ${{ secrets.FIREBASE_CREDENTIALS_B64 }}
+      REGISTRATION_API_KEY: ${{ secrets.REGISTRATION_API_KEY }}
+      HOST_URL: https://registroimeimultibanda.cl
+      PYTHONUNBUFFERED: "1"
+      BATCH_ID: ${{ github.event.inputs.batchId }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.11"
+          cache: "pip"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Show batch id
+        run: echo "Procesando batchId=${BATCH_ID}"
+
       - name: Run Bulk IMEI Verification Script
-        env:
-          FIREBASE_CREDENTIALS_B64: ${{ secrets.FIREBASE_CREDENTIALS_B64 }}
-          BATCH_ID: ${{ github.event.inputs.batchId }}
-          REGISTRATION_API_KEY: ${{ secrets.REGISTRATION_API_KEY }}
-          HOST_URL: https://registroimeimultibanda.cl
         run: python bulk_imei_verification.py
