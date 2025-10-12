@@ -1,147 +1,171 @@
-# script.py - VERSIÓN PARA GITHUB ACTIONS (CON DEPURACIÓN MEJORADA)
-import gspread
-import time
+# script.py - Verificación IMEI desde Google Sheets (sin Selenium, usando WOM API)
 import os
+import time
 import json
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service as ChromeService
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
-from selenium_stealth import stealth
+import html
+import requests
+import gspread
+from datetime import datetime, timezone
 
-# --- CONFIGURACIÓN (Leída desde los Secretos de GitHub) ---
-NOMBRE_HOJA_CALCULO = os.environ.get('GSPREAD_SHEET_NAME')
-CREDENCIALES_JSON = os.environ.get('GSPREAD_CREDENTIALS')
-
+# === Configuración desde Secrets/Env ===
+GSPREAD_SHEET_NAME = os.environ.get('GSPREAD_SHEET_NAME')  # nombre de la hoja
+GSPREAD_CREDENTIALS = os.environ.get('GSPREAD_CREDENTIALS')  # JSON de service account (texto)
 ESTADO_A_BUSCAR = "En Proceso"
 ESTADO_FINALIZADO = "Listo"
 COLUMNA_IMEI = "IMEI 1"
 COLUMNA_ESTADO = "Estado"
-URL_PAGINA = "https://sucursalmiwom.wom.cl/listablanca/sello-multibanda/sello-multibandas.jsp"
-TIEMPO_MAX_ESPERA = 30
 
-def conectar_a_google_sheets():
-    """Conecta con Google Sheets usando las credenciales desde los secretos."""
-    try:
-        # 1. Intenta cargar las credenciales
-        if not CREDENCIALES_JSON:
-            print("❌ Error: El secreto 'GSPREAD_CREDENTIALS' no está definido.")
-            return None
-        creds_dict = json.loads(CREDENCIALES_JSON)
-        print("✅ Credenciales JSON cargadas correctamente.")
-        
-        # 2. Intenta autenticar
-        gc = gspread.service_account_from_dict(creds_dict)
-        print("✅ Autenticación con la cuenta de servicio exitosa.")
-        
-        # 3. Intenta abrir la hoja de cálculo
-        if not NOMBRE_HOJA_CALCULO:
-            print("❌ Error: El secreto 'GSPREAD_SHEET_NAME' no está definido.")
-            return None
-        worksheet = gc.open(NOMBRE_HOJA_CALCULO).sheet1
-        print("✅ Conexión y apertura de la hoja de cálculo exitosa.")
-        return worksheet
-        
-    except json.JSONDecodeError:
-        print("❌ Error Fatal: El contenido de 'GSPREAD_CREDENTIALS' no es un JSON válido. Asegúrate de copiar todo el contenido del archivo .json.")
-        return None
-    except gspread.exceptions.SpreadsheetNotFound:
-        print(f"❌ Error Fatal: No se encontró la hoja de cálculo '{NOMBRE_HOJA_CALCULO}'. Verifica el nombre y asegúrate de haberla compartido con el 'client_email' de las credenciales.")
-        return None
-    except Exception as e:
-        print(f"❌ Error inesperado al conectar con Google Sheets: {e}")
-        return None
+# WOM
+WOM_PAGE = "https://sucursalmiwom.wom.cl/listablanca/sello-multibanda/sello-multibandas.jsp#"
+WOM_API  = "https://sucursalmiwom.wom.cl/listablanca/api/whitelist/consultaImeiInfo/v2"
+REQ_TIMEOUT = 20
+RETRIES_PER_IMEI = 2
+SLEEP_BETWEEN_RETRIES = 0.6
+SLEEP_BETWEEN_ROWS = 0.5  # para no castigar la API de Sheets ni WOM
 
-def verificar_imei_selenium(driver, imei):
-    """Verifica un IMEI en la página web."""
-    try:
-        driver.get(URL_PAGINA)
-        wait = WebDriverWait(driver, TIEMPO_MAX_ESPERA)
-        
-        input_field = wait.until(EC.visibility_of_element_located((By.ID, "imei")))
-        input_field.clear()
-        input_field.send_keys(imei)
+# =============== WOM helpers ==================
+def wom_query(imei: str) -> dict:
+    """
+    Consulta directa al endpoint oficial de WOM usando requests.Session() y backoff.
+    Retorna: { ok, estado, is5g, mensaje, raw, http, error }
+    ok=True solo si hay HTTP 200 y un ESTADO presente.
+    """
+    if not imei or not str(imei).strip():
+        return {"ok": False, "estado": None, "is5g": None, "mensaje": "IMEI vacío", "raw": "", "http": None, "error": "imei_vacio"}
 
-        submit_button = wait.until(EC.element_to_be_clickable((By.ID, "search_imei")))
-        # Usamos un clic con JavaScript para máxima compatibilidad en entornos automatizados
-        driver.execute_script("arguments[0].click();", submit_button)
-        print("Buscando resultado...")
+    imei_str = str(imei).strip()
+    payload = {"linea": "", "imei": imei_str, "token": ""}  # hoy token vacío funciona
 
-        # Lógica para determinar el resultado
+    base_headers = {
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Content-Type": "application/json",
+        "X-Requested-With": "XMLHttpRequest",
+        "Origin": "https://sucursalmiwom.wom.cl",
+        "Referer": WOM_PAGE,
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Cache-Control": "no-cache",
+    }
+
+    s = requests.Session()
+    raw = ""
+    http = None
+    last_err = None
+
+    for attempt in range(RETRIES_PER_IMEI + 1):
         try:
-            # 1. Intenta encontrar el elemento de "NO ENCONTRADO" durante 5 segundos.
-            wait_short = WebDriverWait(driver, 5)
-            wait_short.until(EC.visibility_of_element_located((By.ID, "respuesta_es_notfound_response")))
-            # Si lo encuentra, el equipo no está inscrito.
-            return "Equipo no se encuentra inscrito."
-        except TimeoutException:
-            # 2. Si después de 5 seg no lo encontró, asumimos que es un caso de éxito.
-            return "Equipo se encuentra inscrito."
+            # GET previo para cookies/sesión
+            s.get(WOM_PAGE, headers={"User-Agent": base_headers["User-Agent"]}, timeout=REQ_TIMEOUT)
+            # POST real
+            r = s.post(WOM_API, json=payload, headers=base_headers, timeout=REQ_TIMEOUT)
+            http = r.status_code
+            raw = r.text
 
-    except TimeoutException:
-        return "Error: La página no respondió a tiempo."
-    except Exception as e:
-        return f"Error en Selenium: {e}"
+            data = None
+            try:
+                data = r.json()
+            except ValueError:
+                data = None
 
-# --- LÓGICA PRINCIPAL ---
+            if http == 200 and isinstance(data, dict):
+                arr = (data or {}).get("Resultado") or []
+                if arr:
+                    it = arr[0]
+                    estado = (it.get("ESTADO") or "").strip()
+                    is5g = it.get("is5g")
+                    msg = html.unescape((it.get("mensajeSubtel") or "")).replace("<br>", "\n")
+                    return {"ok": bool(estado), "estado": estado, "is5g": is5g, "mensaje": msg, "raw": raw, "http": http, "error": None}
+
+            last_err = f"http={http}, sin ESTADO"
+        except requests.RequestException as e:
+            last_err = f"red:{type(e).__name__} {e}"
+
+        time.sleep(SLEEP_BETWEEN_RETRIES + 0.2 * attempt)
+
+    return {"ok": False, "estado": None, "is5g": None, "mensaje": None, "raw": raw, "http": http, "error": last_err}
+
+
+def clasificar_estado_simple(estado: str | None) -> str:
+    """
+    Mapea el ESTADO de WOM a solo dos etiquetas:
+      - 'Equipo NO inscrito' si ESTADO == 'NOEN'
+      - 'Equipo Inscrito'    en cualquier otro caso con ESTADO presente
+      - 'Sin resultado'      si no hay estado
+    """
+    if not estado:
+        return "Sin resultado"
+    return "Equipo NO inscrito" if str(estado).strip().upper() == "NOEN" else "Equipo Inscrito"
+
+
+# =============== Google Sheets helpers ==================
+def conectar_a_google_sheets():
+    """Conecta con Google Sheets usando credenciales JSON (texto en env)."""
+    if not GSPREAD_CREDENTIALS:
+        raise RuntimeError("El secreto 'GSPREAD_CREDENTIALS' no está definido.")
+    if not GSPREAD_SHEET_NAME:
+        raise RuntimeError("El secreto 'GSPREAD_SHEET_NAME' no está definido.")
+
+    creds_dict = json.loads(GSPREAD_CREDENTIALS)
+    gc = gspread.service_account_from_dict(creds_dict)
+    ws = gc.open(GSPREAD_SHEET_NAME).sheet1
+    return ws
+
+
+def obtener_indices_columnas(ws):
+    """Lee la fila de encabezados y devuelve dict nombre->indice (1-based)."""
+    headers = ws.row_values(1)
+    mapa = {h.strip(): i+1 for i, h in enumerate(headers)}
+    if COLUMNA_IMEI not in mapa or COLUMNA_ESTADO not in mapa:
+        raise RuntimeError(f"No se hallaron columnas '{COLUMNA_IMEI}' y/o '{COLUMNA_ESTADO}' en la fila 1.")
+    return mapa
+
+
+# =================== Main =====================
 if __name__ == "__main__":
-    hoja = conectar_a_google_sheets()
-    if not hoja:
-        # La función conectar_a_google_sheets ya imprimió el error específico.
-        # Salimos del script para que el job de GitHub Actions falle y nos notifique.
-        exit(1)
-
-    print("🤖 Iniciando navegador en modo headless (invisible)...")
-    options = webdriver.ChromeOptions()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("window-size=1920,1080") # A veces ayuda a que las páginas se rendericen correctamente
-    
-    driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
-    
-    # Aplicar stealth para evitar ser detectado como bot
-    stealth(driver,
-            languages=["es-ES", "es"],
-            vendor="Google Inc.",
-            platform="Win32",
-            webgl_vendor="Intel Inc.",
-            renderer="Intel Iris OpenGL Engine",
-            fix_hairline=True,
-            )
-
+    print("🚀 Verificación de IMEI desde Google Sheets (sin Selenium)")
     try:
-        print("🤖 Iniciando proceso de verificación...")
-        filas = hoja.get_all_records()
-        col_estado_index = hoja.find(COLUMNA_ESTADO).col
-        col_imei_index = hoja.find(COLUMNA_IMEI).col
+        ws = conectar_a_google_sheets()
+        print("✅ Conectado a Google Sheets.")
 
-        for indice, fila in enumerate(filas):
-            # El número de fila real en la hoja es el índice + 2 (1 por el encabezado, 1 porque el índice es base 0)
-            numero_fila_real = indice + 2
-            
-            if fila.get(COLUMNA_ESTADO) == ESTADO_A_BUSCAR and fila.get(COLUMNA_IMEI):
-                imei_actual = str(fila.get(COLUMNA_IMEI))
-                print(f"\n🔎 Procesando IMEI: {imei_actual} (Fila {numero_fila_real})")
-                
-                resultado_web = verificar_imei_selenium(driver, imei_actual)
-                print(f"📄 Resultado obtenido: {resultado_web}")
-                
-                # Actualizar el estado basado en el resultado
-                if "error" in resultado_web.lower():
-                    # Si hay un error de Selenium, lo anotamos en la hoja
-                    hoja.update_cell(numero_fila_real, col_estado_index, resultado_web)
-                    print(f"⚠️ Error al procesar. Fila {numero_fila_real} actualizada con el mensaje de error.")
-                elif "no se encuentra inscrito" in resultado_web.lower():
-                    # Si no está inscrito, lo dejamos como "En Proceso" o el estado que definas
-                    print(f"⚠️ Equipo no inscrito. La fila {numero_fila_real} no se modifica.")
-                else:
-                    # Si está inscrito, actualizamos a "Listo"
-                    hoja.update_cell(numero_fila_real, col_estado_index, ESTADO_FINALIZADO)
-                    print(f"✅ Equipo inscrito. Fila {numero_fila_real} actualizada a '{ESTADO_FINALIZADO}'.")
-    finally:
-        driver.quit()
+        col_map = obtener_indices_columnas(ws)
+        col_estado_idx = col_map[COLUMNA_ESTADO]
+        col_imei_idx = col_map[COLUMNA_IMEI]
+
+        # Trae todas las filas como dicts (usa encabezados)
+        filas = ws.get_all_records()
+        print(f"📄 Filas leídas: {len(filas)}")
+
+        for i, fila in enumerate(filas, start=2):  # datos empiezan en fila 2
+            estado_actual = str(fila.get(COLUMNA_ESTADO) or "").strip()
+            imei = str(fila.get(COLUMNA_IMEI) or "").strip()
+
+            if estado_actual != ESTADO_A_BUSCAR or not imei:
+                continue
+
+            print(f"\n🔎 Fila {i} | IMEI: {imei}")
+            # Consulta WOM
+            res = wom_query(imei)
+            if res.get("ok"):
+                etiqueta = clasificar_estado_simple(res.get("estado"))
+            else:
+                etiqueta = "Sin resultado"
+
+            print(f"   → Resultado: {etiqueta}")
+
+            # Reglas de actualización (como en tu script original)
+            if etiqueta == "Equipo Inscrito":
+                ws.update_cell(i, col_estado_idx, ESTADO_FINALIZADO)
+                print(f"   ✅ Estado ACTUALIZADO a '{ESTADO_FINALIZADO}' (fila {i})")
+            elif etiqueta == "Equipo NO inscrito":
+                # no actualizamos, lo dejamos en "En Proceso"
+                print(f"   ⚠️ Equipo NO inscrito. Fila {i} se mantiene en '{ESTADO_A_BUSCAR}'.")
+            else:
+                # Etiqueta 'Sin resultado': deja trazas útiles en la celda Estado
+                ws.update_cell(i, col_estado_idx, "Sin resultado")
+                print(f"   ⚠️ Sin resultado. Fila {i} marcada como 'Sin resultado'.")
+
+            time.sleep(SLEEP_BETWEEN_ROWS)
+
         print("\n🎉 Proceso completado.")
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        raise
