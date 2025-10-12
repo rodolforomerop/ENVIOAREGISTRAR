@@ -1,26 +1,37 @@
 name: Verificador Automatico de IMEI (RIM)
 
 on:
-  # Para que puedas seguir ejecutándolo manualmente
   workflow_dispatch:
-
-  # Para ejecutarlo en el horario programado
   schedule:
-    # Se ejecuta cada 10 minutos, todos los días.
-    - cron: '*/10 * * * *'
+    - cron: "*/10 * * * *" # ¡Ojo: es UTC!
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rim-imei-check
+  cancel-in-progress: true
 
 jobs:
   verificar:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      FIREBASE_CREDENTIALS_B64: ${{ secrets.FIREBASE_CREDENTIALS_B64 }}
+      REGISTRATION_API_KEY: ${{ secrets.REGISTRATION_API_KEY }}
+      HOST_URL: https://registroimeimultibanda.cl
+      PYTHONUNBUFFERED: "1"
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.11"
+          cache: "pip"
 
       - name: Install dependencies
         run: |
@@ -28,8 +39,4 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run IMEI Check Script
-        env:
-          FIREBASE_CREDENTIALS_B64: ${{ secrets.FIREBASE_CREDENTIALS_B64 }}
-          REGISTRATION_API_KEY: ${{ secrets.REGISTRATION_API_KEY }}
-          HOST_URL: https://registroimeimultibanda.cl
         run: python main.py
