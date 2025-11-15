@@ -3,7 +3,6 @@ name: Verificador Automatico de IMEI (GSHEET)
 on:
   workflow_dispatch: {}
   schedule:
-    - cron: "*/15 * * * *"  # OJO: en UTC
 
 permissions:
   contents: read
