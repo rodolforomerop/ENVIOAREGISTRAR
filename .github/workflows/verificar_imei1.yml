@@ -2,8 +2,6 @@ name: Verificador Automatico de IMEI (RIM)
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "*/10 * * * *" # ¡Ojo: es UTC!
 
 permissions:
   contents: read
