@@ -2,9 +2,7 @@ name: Sincronizar Pedidos de WooCommerce
 
 on:
   workflow_dispatch:
-  schedule:
-    # Se ejecuta cada 10 minutos, todos los días.
-    - cron: '*/10 * * * *'
+
 
 jobs:
   sincronizar:
