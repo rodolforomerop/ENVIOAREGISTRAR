@@ -2,9 +2,7 @@ name: Enviar Recordatorios de Pago Pendiente
 
 on:
   workflow_dispatch:
-  schedule:
-    # Se ejecuta cada hora, en el minuto 5.
-    - cron: '5 * * * *'
+
 
 jobs:
   enviar-recordatorios:
