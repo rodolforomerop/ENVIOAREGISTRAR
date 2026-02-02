@@ -2,10 +2,6 @@ name: Gestionar Suscripciones Manuales
 
 on:
   workflow_dispatch:
-  schedule:
-    # Se ejecuta todos los días a las 10:00 AM (UTC).
-    # Ajusta esta hora según te convenga. 10:00 UTC es 06:00 o 07:00 en Chile.
-    - cron: '0 11 * * *'
 
 jobs:
   manage-subscriptions:
